@@ -146,9 +146,6 @@ class EnvManager:
         self.env_entry['env'] = REGISTERED_ENVS[self.env_entry['env_class']](self.env_entry['config'])
         self.env_entry['status'] = EnvStatus()
 
-        self.prefix_lookup = None
-        self.env_config_lookup = None
-        self._init_prefix_lookup()
         self.request_counter = GlobalCounter.options(
             name=f"EnvManagerRequestCounter",
             get_if_exists=True,
@@ -192,7 +189,7 @@ class EnvManager:
             self.rollout_cache["penalty"] += self.worker_config.format_penalty
 
         status, history = self._log_env_state(entry['status'], self.rollout_cache['history'],
-                                              entry['env'].render(), entry['max_actions_per_traj'], executed_actions,
+                                              entry['env'].render(), entry['env'].get_all_actions(), entry['max_actions_per_traj'], executed_actions,
                                               valid_actions, acc_reward, turn_done, turn_info, env_input)
         status.step += 1
         entry['status'] = status
@@ -282,84 +279,22 @@ class EnvManager:
 
         self.process_input_queue_thread.join()
 
-
-    def _init_prefix_lookup(self):
-        # TODO: 这里并不合理
-        prefix_lookup = {}
-        prefixes = {}
-        env_config_lookup = {}
-        env_config = {}
-        for env_tag, env_config in self.pipeline_config.custom_envs.items():
-            if env_tag not in self.worker_config.tags:
-                continue
-            env_config_new = asdict(REGISTERED_ENV_CONFIGS[env_config.env_type]())
-            env_config_new.update(env_config)
-            env_instruction = env_config_new.get("env_instruction", "")
-            # TODO: special tokens add to config
-            if env_config_new.get("grid_vocab", False):
-                grid_vocab_str = "\nThe meaning of each symbol in the state is:\n" + ", ".join(
-                    [f"{k}: {v}" for k, v in env_config_new["grid_vocab"].items()])
-                env_instruction += grid_vocab_str
-            if env_config_new.get("action_lookup", False):
-                action_lookup_str = "\nYour available actions are:\n" + ", ".join(
-                    [f"{v}" for k, v in env_config_new["action_lookup"].items()])
-                # one action per step
-                # action_lookup_str += f"\nYou can make up to {env_config_new['max_actions_per_traj']} actions, separated by the action separator \" " + self.action_sep + " \"\n"
-                env_instruction += action_lookup_str
-            prefixes[env_tag] = env_instruction
-            env_config_lookup[env_tag] = {
-                'max_tokens': env_config.get("max_tokens", self.pipeline_config.response_length)}
-
-        tags = self.worker_config.tags
-        n_groups = self.worker_config.n_groups
-        group_size = self.worker_config.group_size
-
-        cur_group = 0
-        for env_tag, n_group in zip(tags, n_groups):
-            env_instruction = prefixes[env_tag]
-            start_idx = cur_group * group_size
-            end_idx = (cur_group + n_group) * group_size
-            for i in range(start_idx, end_idx):
-                prefix_lookup[i] = env_instruction
-                env_config_lookup[i] = env_config_lookup[env_tag]
-            cur_group += n_group
-
-        self.prefix_lookup = prefix_lookup
-        self.env_config_lookup = env_config_lookup
-
     def get_lm_input(self, env_output, prepare_for_update: bool) -> DataProto:
         """"""
-        llm_input_texts, messages_list, llm_input_images = self._format_messages(
+        llm_input_texts, messages_list = self._format_messages(
             env_output=env_output,
             prepare_for_update=prepare_for_update,
             use_raw_llm_response=False)
-        if llm_input_images and any(env_images for env_images in llm_input_images):
-            assert self.collator, "requires collator for multi-modal data"
-        if self.collator:
-            # TODO: collator and image are coupled, fix it
-            # assume the collator has these attributes
-            prompt_key, image_key, image_flag_key = self.collator.prompt_key, self.collator.image_key, self.collator.image_flag_key
-            features = [{
-                prompt_key: text,
-                image_key: image,
-                image_flag_key: True if image else False
-            } for text, image in zip(llm_input_texts, llm_input_images)]
-            inputs = self.collator(features)
-            llm_inputs: DataProto = DataProto.from_single_dict(inputs)
-            input_ids, attention_mask, position_ids = llm_inputs.batch[
-                "input_ids"], llm_inputs.batch[
-                    "attention_mask"], llm_inputs.batch["position_ids"]
-        else:
-            inputs = self.tokenizer(llm_input_texts, return_tensors="pt", padding=True, padding_side="left",
-                                    truncation=False)  # do not truncate here. Process later at TODO
-            input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
-            position_ids = attention_mask.cumsum(dim=-1)
-            llm_inputs = DataProto()
-            llm_inputs.batch = TensorDict({
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "position_ids": position_ids,
-            }, batch_size=input_ids.shape[0])
+        inputs = self.tokenizer(llm_input_texts, return_tensors="pt", padding=True, padding_side="left",
+                                truncation=False)  # do not truncate here. Process later at TODO
+        input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
+        position_ids = attention_mask.cumsum(dim=-1)
+        llm_inputs = DataProto()
+        llm_inputs.batch = TensorDict({
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+        }, batch_size=input_ids.shape[0])
         llm_inputs.non_tensor_batch.update({
             "env_ids": np.array([env_output["env_id"]], dtype=object),
             "group_ids": np.array([env_output["group_id"]], dtype=object),
@@ -396,34 +331,16 @@ class EnvManager:
         2. 每个rollout 应该是一个List[Dict]
         3. 每个Dict 应该是一个step的信息
         """
-        llm_input_texts, messages_list, llm_input_images = self._format_messages(
+        llm_input_texts, messages_list = self._format_messages(
             env_output=self.rollout_cache,
             prepare_for_update=True,
             use_raw_llm_response=False)
-        has_images = False
-        if any(env_images for env_images in llm_input_images):
-            has_images = True
-            assert self.collator, "requires collator for multi-modal data"
-        if self.collator:
-            # assume the collator has these attributes
-            prompt_key, image_key, image_flag_key = self.collator.prompt_key, self.collator.image_key, self.collator.image_flag_key
-            features = [{
-                prompt_key: text,
-                image_key: image,
-                image_flag_key: True if image else False
-            } for text, image in zip(llm_input_texts, llm_input_images)]
-            inputs = self.collator(features)
-            llm_inputs: DataProto = DataProto.from_single_dict(inputs)
-            input_ids, attention_mask, position_ids = llm_inputs.batch[
-                "input_ids"], llm_inputs.batch[
-                    "attention_mask"], llm_inputs.batch["position_ids"]
-        else:
-            inputs = self.tokenizer(llm_input_texts, return_tensors="pt", padding=True, padding_side="left",
-                                    truncation=False)
-            input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
-            position_ids = attention_mask.cumsum(dim=-1)
-            llm_inputs = DataProto()
-            llm_inputs.batch = TensorDict(
+        inputs = self.tokenizer(llm_input_texts, return_tensors="pt", padding=True, padding_side="left",
+                                truncation=False)
+        input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
+        position_ids = attention_mask.cumsum(dim=-1)
+        llm_inputs = DataProto()
+        llm_inputs.batch = TensorDict(
                 {
                     "input_ids": input_ids,
                     "attention_mask": attention_mask,
@@ -505,9 +422,6 @@ class EnvManager:
         env_metric["env/response_length"] = response_length
         self.rollout_cache['metrics'] = env_metric
         llm_inputs.meta_info = {"metrics": env_metric}
-        if has_images:
-            # TODO: maybe make this field be list of str for specific features
-            llm_inputs.meta_info["_broadcast_non_tensor_batch"] = True
         return llm_inputs
 
 
@@ -522,7 +436,7 @@ class EnvManager:
         results = [PIL.Image.fromarray(_state, mode='RGB') for _state in state]
         return results
 
-    def _update_cache_history(self, history: List[Dict], next_state, actions_left,
+    def _update_cache_history(self, history: List[Dict], next_state, legal_actions, actions_left,
                               num_actions_info: Optional[Dict] = None):
         """
         Update last step info and append state to history
@@ -532,12 +446,9 @@ class EnvManager:
             history[-1].update(num_actions_info)
 
         entry = {}  # append state to history
-        if isinstance(next_state, str):  # text state
-            entry['state'] = next_state
-        else:  # multimodal state
-            entry['state'] = "<images>" * len(next_state)
-            entry['images'] = next_state
+        entry['state'] = next_state
         entry['actions_left'] = actions_left
+        entry['legal_actions'] = legal_actions
         history.append(entry)
         return history
 
@@ -551,6 +462,8 @@ class EnvManager:
             rev_action_lookup = {v.lower(): k for k, v in action_lookup.items()}
             actions = [action.lower() for action in actions]
             mapped_actions = [rev_action_lookup[action] for action in actions if action in rev_action_lookup]
+        legal_actions = entry['env'].get_all_actions()
+        mapped_actions = [action for action in mapped_actions if action in legal_actions]
         return mapped_actions
 
     def _execute_actions(self, env, actions):
@@ -567,7 +480,7 @@ class EnvManager:
                 break
         return acc_reward, turn_info, turn_done, executed_actions
 
-    def _log_env_state(self, status, history, cur_obs, max_actions_per_traj, executed_actions, all_actions, acc_reward,
+    def _log_env_state(self, status, history, cur_obs, legal_actions, max_actions_per_traj, executed_actions, all_actions, acc_reward,
                        turn_done, turn_info, env_input) -> Tuple[EnvStatus, List[Dict]]:
         obs = self._handle_mm_state(cur_obs)
         status.num_actions += len(executed_actions)
@@ -576,7 +489,7 @@ class EnvManager:
         if turn_done:
             status.terminated = True
             status.truncated = not turn_info.get('success', False)
-        history = self._update_cache_history(history, next_state=obs, actions_left=actions_left, num_actions_info={
+        history = self._update_cache_history(history, next_state=obs, legal_actions=legal_actions, actions_left=actions_left, num_actions_info={
             'actions': executed_actions, 'reward': acc_reward, 'info': turn_info,
             'llm_response': env_input['llm_response'], 'llm_raw_response': env_input['llm_raw_response']
         })
@@ -584,75 +497,32 @@ class EnvManager:
 
     def _format_messages(self, env_output: Dict, prepare_for_update: bool, use_raw_llm_response: bool):
         if 'state' in env_output['history'][-1] and (not use_raw_llm_response and prepare_for_update):
-            env_output['history'] = env_output['history'][
-                                    :-1]  # when prepare for update, we do not add the state from the n+1 turn to the trajectory
-
-        # TODO: allow window_size, allow env specific system_prompt,
-        # allow specific prompt_format
-        # TODO: maybe use image placeholder from result of env.step to
-        # unify with and without image, while this requires to simulate
-        # processor manually
-        env_images = [] if "state" in env_output["history"][
-            0] and "images" in env_output["history"][0] else None
-        # for multi-modal, content is list of dict
-        first_user_content = [{
-            "type": "text",
-            "text": self.prefix_lookup[env_output["env_id"]],
-        }] if env_images is not None else self.prefix_lookup[
-            env_output["env_id"]]
+            # when prepare for update, we do not add the state from the n+1 turn to the trajectory
+            env_output['history'] = env_output['history'][:-1]
         messages = [
-            {"role": "system", "content": f"You're a helpful assistant. You are a good game player. You are aiming to get high reward in the game."},
-            {"role": "user", "content": first_user_content}
+            {"role": "system", "content": self.env_entry['env'].get_prompt(mode="prefix")['system']},
+            {"role": "user", "content": self.env_entry['env'].get_prompt(mode="prefix")['user']}
         ]
 
         for idx, content in enumerate(env_output["history"]):
-            turn_idx_content = [{
-                "type": "text",
-                "text": f"\nTurn {idx + 1}:\n"
-            }] if env_images is not None else f"\nTurn {idx + 1}:\n"
-            # assume the role of messages[-1] be user, this may not be
-            # right if reward not in history content
-            # TODO: support if messages[-1] is not user
+            turn_idx_content = f"\nTurn {idx + 1}:\n"
             messages[-1]["content"] += turn_idx_content
             if "state" in content:
                 FORMAT_PROMPT = "<think> [Your thoughts] </think> <answer> [your answer] </answer>" if self.pipeline_config.enable_think else "<answer> [your answer] </answer>"
-                LENGTH_PROMPT = f"Max response length: {self.env_config_lookup[env_output['env_id']]['max_tokens']} words (tokens)."
-                if env_images is not None:
-                    messages[-1]["content"] += [{
-                        "type": "text",
-                        "text": "State:\n"
-                    }, {
-                        "type": "image",
-                    }, {
-                        "type":
-                        "text",
-                        "text":
-                        (f"\nYou have {content['actions_left']} actions left. "
-                         f"Always output: {FORMAT_PROMPT} with no extra text."
-                         f"Strictly follow this format, history response that do not follow the format will be set as 'INVALID'. {LENGTH_PROMPT}\n"
-                         f"Decide the next action:\n")
-                    }]
-                    # ex_manager returns list of images for mm
-                    env_images.extend(content["images"])
-                else:
-                    messages[-1]["content"] += (
-                        f"State:\n{content['state']}\nYou have {content['actions_left']} actions left. "
+                LENGTH_PROMPT = f"Max response length: {self.pipeline_config.custom_envs[self.env_entry['tag']]['max_tokens']} words (tokens)."
+                messages[-1]["content"] += (
+                        f"Game State:\n{content['state']}\nYou have {content['actions_left']} actions left. "
+                        f"Legal Actions:\n{content['legal_actions']}\n"
                         f"Always output: {FORMAT_PROMPT} with no extra text."
                         f"Strictly follow this format, history response that do not follow the format will be set as 'INVALID'. {LENGTH_PROMPT}\n"
                         f"Decide the next action:\n")
             if "llm_raw_response" in content:
                 #       改成actions合理吗？
                 messages.append({"role": "assistant",
-                                 "content": content["llm_response"] if not use_raw_llm_response else content[
-                                     "llm_raw_response"]})
+                                 "content": content["llm_response"] if not use_raw_llm_response else content["llm_raw_response"]})
             if "reward" in content and not (prepare_for_update and idx == len(env_output["history"]) - 1):
                 # when prepare for update, we do not add the reward from the n+1 turn to the trajectory
-                reward_content = [
-                    {
-                        "type": "text",
-                        "text": f"Reward:\n{content['reward']}\n"
-                    }
-                ] if env_images is not None else f"Reward:\n{content['reward']}\n"
+                reward_content = f"Reward:\n{content['reward']}\n"
                 messages.append({"role": "user", "content": reward_content})
 
         # NOTE: this assertion is important for loss mask computation
@@ -692,7 +562,7 @@ class EnvManager:
         # TODO: 应该没有必要，注意处理mask
         # TODO: special tokens add to config
         text = text.replace("<|im_end|>\n", "<|im_end|>")
-        return [text], [messages], [env_images]
+        return [text], [messages], [None]
 
 
     def _parse_response(self, response: str) -> List:

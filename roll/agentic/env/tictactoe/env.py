@@ -17,8 +17,8 @@ class TicTacToe(BaseDiscreteActionEnv):
     def __init__(self, config: TicTacToeConfig = TicTacToeConfig()):
         # Using mappings directly from config
         self.config = config
-        self.ACTION_LOOKUP = config.action_lookup
         self.render_mode = config.render_mode
+        self.random_opponent = config.random_opponent
 
         BaseDiscreteActionEnv.__init__(self)
         
@@ -39,6 +39,13 @@ class TicTacToe(BaseDiscreteActionEnv):
             return self.reset(next_seed)
 
     def step(self, action_str):
+        observations, rewards, done, info = self._step(action_str)
+        # If the opponent is random, we need to let the opponent take action
+        if self.current_player == 1 and self.random_opponent and not done:
+            observations, rewards, done, info = self._step(random.choice(list(self.get_all_actions().values())))
+        return observations, rewards, done, info
+
+    def _step(self, action_str):
         action = self._string_to_action(action_str)
         if self.state.is_terminal():
             raise RuntimeError("Cannot apply action on a terminal state.")
@@ -50,16 +57,17 @@ class TicTacToe(BaseDiscreteActionEnv):
         info = self._get_info()
         return observations, rewards, done, info
 
-    def render(self, mode=None):
-        render_mode = mode if mode is not None else self.render_mode
-        if render_mode == "text":
-            return self._render_text()
-        elif render_mode == "rgb_array":
-            return self._render_rgb_array()
+    def get_prompt(self, mode="prefix"):
+        if mode == "prefix":
+            prefix_prompt = self._get_prefix_prompt()
+            return prefix_prompt
+        elif mode == "state":
+            state_prompt = self._get_state_prompt()
+            return state_prompt
         else:
-            raise ValueError(f"Invalid mode: {render_mode}")
+            raise ValueError(f"Invalid prompt mode: {mode}")
 
-    def get_prompt(self):
+    def _get_prefix_prompt(self):
         system_prompt = "You are an AI agent that makes optimal decisions in the game of tic-tac-toe."
         rules = (
                 "1. Tic-tac-toe is a two-player board game played on a three-by-three grid. "
@@ -69,29 +77,23 @@ class TicTacToe(BaseDiscreteActionEnv):
                 "4. If all cells are filled and no player wins, the game ends in a draw."
                 )
         mark = "X" if self.current_player == 0 else "O"
-        all_actions = ", ".join(list(self.get_all_actions().values()))
-        instructions = dedent(
-            f"""\
-            Now it is your turn to choose an action. You should output your action in the following JSON format:
-            ```json
-            {{
-                "action": "{mark}(i,j)"
-            }}
-            ```
-            where i is the row index and j is the column index."""
-        )
         user_prompt = (
             f"GAME RULES:\n{rules}\n\n"
             f"PLAYER INFORMATION:\nYour mark is {mark}.\n\n"
+        )
+        prefix_prompt = {
+            "system": system_prompt,
+            "user": user_prompt
+        }
+        return prefix_prompt
+
+    def _get_state_prompt(self):
+        all_actions = ", ".join(list(self.get_all_actions().values()))
+        state_prompt = (
             f"GAME STATE:\n{self.render(mode='text')}\n\n"
-            f"LEGAL ACTIONS:\n{all_actions}.\n\n"
-            f"INSTRUCTIONS:\n{instructions}"
-            )
-        prompt = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-        return prompt
+            f"LEGAL ACTIONS:\n{all_actions}."
+        )
+        return state_prompt
 
     def get_all_actions(self):
         return self._get_legal_actions(self.current_player)
@@ -122,6 +124,15 @@ class TicTacToe(BaseDiscreteActionEnv):
             return {"returns": returns, "winner": winner}
         else:
             return {}
+
+    def render(self, mode=None):
+        render_mode = mode if mode is not None else self.render_mode
+        if render_mode == "text":
+            return self._render_text()
+        elif render_mode == "rgb_array":
+            return self._render_rgb_array()
+        else:
+            raise ValueError(f"Invalid mode: {render_mode}")
 
     def _render_text(self):
         """Render the game state as text."""
@@ -178,12 +189,13 @@ if __name__ == "__main__":
     env.reset()
     done = False
     while not done:
-        prompt = env.get_prompt()
         print("-"*100)
-        print(f"System prompt: \n{prompt[0]['content']}")
-        print(f"User prompt: \n{prompt[1]['content']}")
+        print(f"System prompt: \n{env.get_prompt(mode='prefix')['system']}")
+        print(f"User prompt: \n{env.get_prompt(mode='prefix')['user']}")
+        print(f"State prompt: \n{env.get_prompt(mode='state')}")
         print("-"*100)
         action = random.choice(list(env.get_all_actions().values()))
+        # action = "X(0,0)"
         print(f"Player {env.current_player} taking action: {action}")
         observations, rewards, done, info = env.step(action)
         print(f"observations: \n{observations}")
@@ -221,10 +233,29 @@ if __name__ == "__main__":
     from tqdm import tqdm
     env.reset()
     for step in tqdm(range(num_steps)):
-        prompt = env.get_prompt()
+        prompt = env.get_prompt(mode="prefix")
+        prompt = [
+            {"role": "system", "content": prompt['system']},
+            {"role": "user", "content": prompt['user']}
+        ]
+        state_prompt = env.get_prompt(mode="state")
+        prompt[1]['content'] += f"\n\n{state_prompt}"
+        mark = "X" if env.current_player == 0 else "O"
+        instructions = dedent(
+            f"""\
+            Now it is your turn to choose an action. You should output your action in the following JSON format:
+            ```json
+            {{
+                "action": "{mark}(i,j)"
+            }}
+            ```
+            where i is the row index and j is the column index."""
+        )
+        prompt[1]['content'] += f"\n\n{instructions}"
+        
         print(f"========== Step {step + 1} ==========")
         print(f"System prompt: \n{prompt[0]['content']}")
-        print(f"User prompt: \n{prompt[1]['content']}")
+        print(f"User prompt: \n{prompt[1]['content']}\n")
         action, raw_content = get_action_from_llm(prompt)
         print(f"LLM Response: \n{raw_content}")
         print(f"LLM Action: {action}")
