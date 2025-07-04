@@ -224,6 +224,8 @@ class AgenticConfig(BaseConfig):
         self.val_env_manager.model_args.model_name_or_path = self.pretrain
         self.val_env_manager.generating_args = self.actor_infer.generating_args
         self.custom_envs = DictConfig(self.custom_envs)
+        print(self.train_env_manager)
+        print(self.val_env_manager)
         self.make_env_configs(self.train_env_manager)
         self.make_env_configs(self.val_env_manager)
 

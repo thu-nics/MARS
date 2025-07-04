@@ -45,8 +45,12 @@ class TicTacToe(BaseDiscreteActionEnv):
         observations, rewards, done, info = self._step(action_str)
         # If the opponent is random, we need to let the opponent take action
         if self.current_player == 1 and self.random_opponent and not done:
-            observations, rewards, done, info = self._step(random.choice(list(self.get_all_actions().values())))
-        return observations, rewards, done, info
+            observations, _rewards, done, info = self._step(random.choice(list(self.get_all_actions().values())))
+            rewards += _rewards
+            reward = rewards[self.current_player]
+        else:
+            reward = rewards[(self.current_player + 1) % 2]
+        return observations, reward, done, info
 
     def _step(self, action_str):
         action = self._string_to_action(action_str)
@@ -67,11 +71,14 @@ class TicTacToe(BaseDiscreteActionEnv):
         elif mode == "state":
             state_prompt = self._get_state_prompt()
             return state_prompt
+        elif mode == "action":
+            action_prompt = self._get_action_prompt()
+            return action_prompt
         else:
             raise ValueError(f"Invalid prompt mode: {mode}")
 
     def _get_prefix_prompt(self):
-        system_prompt = "You are an AI agent that makes optimal decisions in the game of tic-tac-toe."
+        system_prompt = "You are an AI agent that makes optimal decisions to win in the game of tic-tac-toe."
         rules = (
                 "1. Tic-tac-toe is a two-player board game played on a three-by-three grid. "
                 "The grid is 0-indexed, where (0,0) is the top-left corner and (2,2) is the bottom-right corner.\n"
@@ -82,7 +89,7 @@ class TicTacToe(BaseDiscreteActionEnv):
         mark = "X" if self.current_player == 0 else "O"
         user_prompt = (
             f"GAME RULES:\n{rules}\n\n"
-            f"PLAYER INFORMATION:\nYour mark is {mark}.\n\n"
+            f"PLAYER INFORMATION:\nYour mark is {mark}."
         )
         prefix_prompt = {
             "system": system_prompt,
@@ -97,6 +104,14 @@ class TicTacToe(BaseDiscreteActionEnv):
             f"LEGAL ACTIONS:\n{all_actions}."
         )
         return state_prompt
+
+    def _get_action_prompt(self):
+        action_prompt = (
+            "Each action is represented as <{mark}({row},{column})>, "
+            "where {mark} is your mark, "
+            "and {row} and {column} are integers indicating the row and column of the cell to place your mark."
+        )
+        return action_prompt
 
     def get_all_actions(self):
         return self._get_legal_actions(self.current_player)
@@ -114,12 +129,12 @@ class TicTacToe(BaseDiscreteActionEnv):
         mark = "X" if player_id == 0 else "O"
         row = action // 3
         column = action % 3
-        return f"{mark}({row},{column})"
+        return f"<{mark}({row},{column})>"
 
     def _string_to_action(self, action_str):
-        mark = action_str[0]
-        row = int(action_str[2])
-        column = int(action_str[4])
+        mark = action_str[1]
+        row = int(action_str[3])
+        column = int(action_str[5])
         return row * 3 + column
 
     def _get_info(self):
@@ -127,7 +142,7 @@ class TicTacToe(BaseDiscreteActionEnv):
             return {}
         returns = self.state.returns()
         winner = int(np.argmax(returns)) if returns[0] != returns[1] else -1
-        return {"returns": returns, "winner": winner}
+        return {"player_0_return": returns[0], "player_1_return": returns[1], "winner": winner}
 
     def render(self, mode=None):
         render_mode = mode if mode is not None else self.render_mode
@@ -256,7 +271,7 @@ if __name__ == "__main__":
         ]
         state_prompt = env.get_prompt(mode="state")
         if isinstance(state_prompt, str):
-            prompt[1]['content'] += state_prompt
+            prompt[1]['content'] += f"\n\n{state_prompt}"
         mark = "X" if env.current_player == 0 else "O"
         instructions = dedent(
             f"""\

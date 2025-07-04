@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Union, Tuple
 
 import PIL
 import numpy as np
+import random
 import ray
 import torch
 from ray.util.queue import Queue, Empty
@@ -169,6 +170,7 @@ class EnvManager:
         # update rollout cache
         self.rollout_cache['history'] = self._update_cache_history(self.rollout_cache['history'],
                                                                    next_state=next_state,
+                                                                   legal_actions=entry['env'].get_all_actions(),
                                                                    actions_left=entry['max_actions_per_traj'],
                                                                    num_actions_info=None)
         self.episode_id += 1
@@ -181,7 +183,7 @@ class EnvManager:
         actions_left_before = entry['max_actions_per_traj'] - entry['status'].num_actions
 
         # execute actions in env
-        valid_actions = self._extract_map_valid_actions(entry, env_input['actions'])
+        valid_actions, env_input = self._extract_map_valid_actions(entry, env_input)
 
         acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(entry['env'], valid_actions[:actions_left_before])
 
@@ -393,7 +395,7 @@ class EnvManager:
         llm_inputs.batch["prompt_mask"] = prompt_mask
         llm_inputs.batch["scores"] = score_tensor
         # for llm raw response
-        llm_raw_text_list, _, _ = self._format_messages(env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=True)
+        llm_raw_text_list, _ = self._format_messages(env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=True)
         llm_inputs.non_tensor_batch['turn_scores'] = np.array(scores, dtype=object)
         llm_inputs.non_tensor_batch['episode_scores'] = np.array(episode_scores, dtype=object)
         llm_inputs.non_tensor_batch['llm_raw_text_list'] = np.array(llm_raw_text_list, dtype=object)
@@ -407,6 +409,7 @@ class EnvManager:
         custom_metric = {}
 
         for turn in self.rollout_cache['history']:
+            # print("format_rollouts turn: ", turn)
             for k, v in turn.get('info', {}).items():
                 if k == 'success':
                     continue
@@ -422,6 +425,7 @@ class EnvManager:
         env_metric["env/response_length"] = response_length
         self.rollout_cache['metrics'] = env_metric
         llm_inputs.meta_info = {"metrics": env_metric}
+        # print("llm_inputs: ", llm_inputs)
         return llm_inputs
 
 
@@ -452,8 +456,9 @@ class EnvManager:
         history.append(entry)
         return history
 
-    def _extract_map_valid_actions(self, entry: Dict, actions: List[str]):
+    def _extract_map_valid_actions(self, entry: Dict, env_input: Dict, random_when_no_valid_actions: bool = True):
         """extract valid actions from the action lookup table (if exists)"""
+        actions = env_input['actions']
         mapped_actions = []
         action_lookup = getattr(entry['env'].config, 'action_lookup', None)
         if action_lookup is None:
@@ -462,9 +467,16 @@ class EnvManager:
             rev_action_lookup = {v.lower(): k for k, v in action_lookup.items()}
             actions = [action.lower() for action in actions]
             mapped_actions = [rev_action_lookup[action] for action in actions if action in rev_action_lookup]
+        
         legal_actions = entry['env'].get_all_actions()
         mapped_actions = [action for action in mapped_actions if action in legal_actions]
-        return mapped_actions
+        if len(mapped_actions) == 0 and random_when_no_valid_actions:
+            mapped_actions = [random.choice(list(legal_actions.values()))]
+            env_input['actions'] = mapped_actions
+            env_input['llm_response'] = env_input['llm_response'].split("<answer>")[0] +\
+                                        "<answer>" + random.choice(list(legal_actions.values())) +\
+                                        " (randomly taken due to wrong response format)" + "</answer>"
+        return mapped_actions, env_input
 
     def _execute_actions(self, env, actions):
         acc_reward, turn_info, turn_done = 0, {}, False
@@ -505,17 +517,18 @@ class EnvManager:
         ]
 
         for idx, content in enumerate(env_output["history"]):
-            turn_idx_content = f"\nTurn {idx + 1}:\n"
+            turn_idx_content = f"\n\nTurn {idx + 1}:\n\n"
             messages[-1]["content"] += turn_idx_content
             if "state" in content:
-                FORMAT_PROMPT = "<think> [Your thoughts] </think> <answer> [your answer] </answer>" if self.pipeline_config.enable_think else "<answer> [your answer] </answer>"
+                FORMAT_PROMPT = "<think> [your thoughts] </think> <answer> [your action] </answer>" if self.pipeline_config.enable_think else "<answer> [your action] </answer>"
                 LENGTH_PROMPT = f"Max response length: {self.pipeline_config.custom_envs[self.env_entry['tag']]['max_tokens']} words (tokens)."
                 messages[-1]["content"] += (
-                        f"GAME STATE:\n{content['state']}\nYou have {content['actions_left']} actions left. "
-                        f"LEGAL ACTIONS:\n{content['legal_actions']}\n"
-                        f"ALWAYS OUTPUT: {FORMAT_PROMPT} with no extra text."
-                        f"Strictly follow this format, history response that do not follow the format will be set as 'INVALID'. {LENGTH_PROMPT}\n"
-                        f"DECISION THE NEXT ACTION:\n")
+                    f"GAME STATE:\n{content['state']}\nYou have {content['actions_left']} actions left.\n\n"
+                    f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}. "
+                    f"{self.env_entry['env'].get_prompt(mode='action')}\n\n"
+                    f"FORMAT INSTRUCTIONS:\n always output {FORMAT_PROMPT} with no extra text. "
+                    f"Strictly follow this format. Response that do not follow the format will lead to a random action. {LENGTH_PROMPT}\n\n"
+                )
             if "llm_raw_response" in content:
                 #       改成actions合理吗？
                 messages.append({"role": "assistant",
@@ -562,7 +575,7 @@ class EnvManager:
         # TODO: 应该没有必要，注意处理mask
         # TODO: special tokens add to config
         text = text.replace("<|im_end|>\n", "<|im_end|>")
-        return [text], [messages], [None]
+        return [text], [messages]
 
 
     def _parse_response(self, response: str) -> List:
