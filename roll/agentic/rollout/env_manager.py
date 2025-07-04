@@ -511,11 +511,11 @@ class EnvManager:
                 FORMAT_PROMPT = "<think> [Your thoughts] </think> <answer> [your answer] </answer>" if self.pipeline_config.enable_think else "<answer> [your answer] </answer>"
                 LENGTH_PROMPT = f"Max response length: {self.pipeline_config.custom_envs[self.env_entry['tag']]['max_tokens']} words (tokens)."
                 messages[-1]["content"] += (
-                        f"Game State:\n{content['state']}\nYou have {content['actions_left']} actions left. "
-                        f"Legal Actions:\n{content['legal_actions']}\n"
-                        f"Always output: {FORMAT_PROMPT} with no extra text."
+                        f"GAME STATE:\n{content['state']}\nYou have {content['actions_left']} actions left. "
+                        f"LEGAL ACTIONS:\n{content['legal_actions']}\n"
+                        f"ALWAYS OUTPUT: {FORMAT_PROMPT} with no extra text."
                         f"Strictly follow this format, history response that do not follow the format will be set as 'INVALID'. {LENGTH_PROMPT}\n"
-                        f"Decide the next action:\n")
+                        f"DECISION THE NEXT ACTION:\n")
             if "llm_raw_response" in content:
                 #       改成actions合理吗？
                 messages.append({"role": "assistant",

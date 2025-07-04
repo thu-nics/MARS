@@ -9,7 +9,8 @@ from roll.agentic.env.base import BaseDiscreteActionEnv
 from textwrap import dedent
 from openai import OpenAI
 import json
-
+from typing import Optional, Dict, Any
+import re
 
 class TicTacToe(BaseDiscreteActionEnv):
     """Tic-Tac-Toe game environment using OpenSpiel."""
@@ -27,15 +28,17 @@ class TicTacToe(BaseDiscreteActionEnv):
 
     @property
     def current_player(self):
+        if self.state is None:
+            return 0
         return self.state.current_player()
 
-    def reset(self, seed=0):
+    def reset(self, seed: Optional[int] = 0):
         try:
             with all_seed(seed):
                 self.state = self._env.new_initial_state()
                 return self.render()
         except (RuntimeError, RuntimeWarning) as e:
-            next_seed = abs(hash(str(seed))) % (2**32) if seed is not None else None
+            next_seed = abs(hash(str(seed))) % (2**32) if seed is not None else 0
             return self.reset(next_seed)
 
     def step(self, action_str):
@@ -47,7 +50,7 @@ class TicTacToe(BaseDiscreteActionEnv):
 
     def _step(self, action_str):
         action = self._string_to_action(action_str)
-        if self.state.is_terminal():
+        if self.state is None or self.state.is_terminal():
             raise RuntimeError("Cannot apply action on a terminal state.")
 
         self.state.apply_action(action)
@@ -100,6 +103,8 @@ class TicTacToe(BaseDiscreteActionEnv):
 
     def _get_legal_actions(self, player_id):
         legal_actions = dict()
+        if self.state is None:
+            return legal_actions
         actions = self.state.legal_actions(player_id)
         for a in actions:
             legal_actions[a] = self._action_to_string(player_id, a)
@@ -118,12 +123,11 @@ class TicTacToe(BaseDiscreteActionEnv):
         return row * 3 + column
 
     def _get_info(self):
-        if self.state.is_terminal():
-            returns = self.state.returns()
-            winner = int(np.argmax(returns)) if returns[0] != returns[1] else -1
-            return {"returns": returns, "winner": winner}
-        else:
+        if self.state is None or not self.state.is_terminal():
             return {}
+        returns = self.state.returns()
+        winner = int(np.argmax(returns)) if returns[0] != returns[1] else -1
+        return {"returns": returns, "winner": winner}
 
     def render(self, mode=None):
         render_mode = mode if mode is not None else self.render_mode
@@ -136,6 +140,8 @@ class TicTacToe(BaseDiscreteActionEnv):
 
     def _render_text(self):
         """Render the game state as text."""
+        if self.state is None:
+            return "___\n___\n___"
         board = np.array([list(line) for line in str(self.state).strip().split("\n")])
         text_repr = []
         for i in range(3):
@@ -166,19 +172,21 @@ class TicTacToe(BaseDiscreteActionEnv):
         ax.set_yticks([0, 1, 2])
         ax.set_xticklabels(['0', '1', '2'])
         ax.set_yticklabels(['0', '1', '2'])
-        board = np.array([list(line) for line in str(self.state).strip().split("\n")])
-        for i in range(3):
-            for j in range(3):
-                piece = board[i][j]
-                if piece != '.':
-                    color = 'red' if piece == 'x' else 'blue'
-                    ax.text(j, i, piece.upper(), fontsize=30, ha='center', va='center', color=color)
+        if self.state is not None:
+            board = np.array([list(line) for line in str(self.state).strip().split("\n")])
+            for i in range(3):
+                for j in range(3):
+                    piece = board[i][j]
+                    if piece != '.':
+                        color = 'red' if piece == 'x' else 'blue'
+                        ax.text(j, i, piece.upper(), fontsize=30, ha='center', va='center', color=color)
         ax.set_aspect('equal')
         return fig
 
     def close(self):
         """Close the environment."""
-        self._env.close()
+        if hasattr(self, '_env') and self._env is not None:
+            self._env.close()
 
 if __name__ == "__main__":
     # Basic unit test
@@ -190,8 +198,9 @@ if __name__ == "__main__":
     done = False
     while not done:
         print("-"*100)
-        print(f"System prompt: \n{env.get_prompt(mode='prefix')['system']}")
-        print(f"User prompt: \n{env.get_prompt(mode='prefix')['user']}")
+        prefix_prompt = env.get_prompt(mode='prefix')
+        print(f"System prompt: \n{prefix_prompt['system']}")
+        print(f"User prompt: \n{prefix_prompt['user']}")
         print(f"State prompt: \n{env.get_prompt(mode='state')}")
         print("-"*100)
         action = random.choice(list(env.get_all_actions().values()))
@@ -211,21 +220,28 @@ if __name__ == "__main__":
     # Initialize OpenAI client
     client = OpenAI(
         base_url="http://localhost:8000/v1",
-        api_key="token-reasoning-llm-zheyue-123",
+        api_key="EMPTY",
     )
 
     # Call LLM to get action based on instruction
     def get_action_from_llm(prompt):
         response = client.chat.completions.create(
-            model="/mnt/public/algm/models/Meta-Llama-3-8B-Instruct",
+            model="/mnt/h_public/algm/models/Qwen3-4B",
             messages=prompt
         )
         raw_content = response.choices[0].message.content
+        if raw_content is None:
+            raw_content = ""
+
+        json_pattern = r"```json\s*(.*?)\s*```"
+        match = re.search(json_pattern, raw_content, re.DOTALL)
+        action_content = match.group(1) if match else "INVALID"
         try:
-            action_json = json.loads(raw_content)
+            action_json = json.loads(action_content)
             return action_json["action"], raw_content
         except Exception as e:
             print("Failed to parse LLM response:", raw_content)
+            print("Extracted content:", action_content)
             raise e
 
     env = TicTacToe()
@@ -239,7 +255,8 @@ if __name__ == "__main__":
             {"role": "user", "content": prompt['user']}
         ]
         state_prompt = env.get_prompt(mode="state")
-        prompt[1]['content'] += f"\n\n{state_prompt}"
+        if isinstance(state_prompt, str):
+            prompt[1]['content'] += state_prompt
         mark = "X" if env.current_player == 0 else "O"
         instructions = dedent(
             f"""\
@@ -264,3 +281,6 @@ if __name__ == "__main__":
         print(f"rewards: {rewards}")
         print(f"done: {done}")
         print(f"info: {info}")
+
+        if done:
+            break
