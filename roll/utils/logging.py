@@ -32,8 +32,8 @@ def reset_file_logger_handler(_logger, log_dir, formatter, WORKER_NAME=None):
             print(f"Created or verified log directory: {log_dir_path}")
     except Exception as e:
         print(f"Warning: Failed to create log directory: {e}")
-        log_path = os.path.join("./output/logs", os.path.basename(log_path))
-        os.makedirs("./output/logs", exist_ok=True)
+        log_path = os.path.join(os.environ.get("ROLL_LOG_DIR", "./output/logs"), os.path.basename(log_path))
+        os.makedirs(os.environ.get("ROLL_LOG_DIR", "./output/logs"), exist_ok=True)
     try:
         file_handler = logging.FileHandler(log_path, mode="w")
         file_handler.setFormatter(formatter)

@@ -212,9 +212,7 @@ class AgenticConfig(BaseConfig):
         self.val_env_manager.name = "val_env"
 
         if self.render_save_dir:
-            self.render_save_dir = os.path.join(
-                self.render_save_dir, self.exp_name, datetime.now().strftime("%Y%m%d-%H%M%S")
-            )
+            self.render_save_dir = os.environ.get("ROLL_RENDER_DIR", self.render_save_dir)
         logger.info(f"add timestamp to render_save_dir  {self.render_save_dir}")
 
         assert self.max_steps > 0, "max_steps must be greater than 0"

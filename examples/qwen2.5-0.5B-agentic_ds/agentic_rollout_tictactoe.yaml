@@ -13,8 +13,8 @@ hydra:
 exp_name: "agentic_pipeline"
 seed: 42
 # logging_dir: ./runs/logs
-output_dir: ./runs
-render_save_dir: ./runs/render
+# output_dir: ./runs
+# render_save_dir: ./runs/render
 
 #track_with: wandb
 #tracker_kwargs:
@@ -33,7 +33,7 @@ track_with: tensorboard
 
 num_gpus_per_node: 8
 
-max_steps: 10
+max_steps: 2
 save_steps: 10000
 logging_steps: 1
 eval_steps: 10

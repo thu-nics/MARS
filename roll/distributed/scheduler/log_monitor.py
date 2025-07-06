@@ -59,7 +59,7 @@ class StdPublisher:
         if role_tag is None:
             return
 
-        log_dir = "./output/logs"
+        log_dir = os.environ.get("ROLL_LOG_DIR", "./output/logs")
         os.makedirs(log_dir, exist_ok=True)
         file_name = f"{role_tag}.log"
         sink = StdPublisher.file_handlers.get(file_name, None)

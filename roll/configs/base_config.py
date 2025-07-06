@@ -161,10 +161,9 @@ class BaseConfig:
             )
             self.response_length = None
 
-        self.output_dir = os.path.join(self.output_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
-        self.logging_dir = os.path.join(self.output_dir, "logs")
+        self.output_dir = os.environ.get("ROLL_OUTPUT_DIR", self.output_dir)
+        self.logging_dir = os.environ.get("ROLL_LOG_DIR", self.logging_dir)
         logger.info(f"add exp_name to logging_dir {self.logging_dir}")
-        os.environ["ROLL_LOG_DIR"] = self.logging_dir
         get_logger()
 
         if self.track_with == "tensorboard":
@@ -176,8 +175,7 @@ class BaseConfig:
 
         upload_type = self.checkpoint_config.get("type", None)
         if upload_type == "file_system":
-            output_dir = self.checkpoint_config.get("output_dir")
-            self.checkpoint_config["output_dir"] = os.path.join(output_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
+            self.checkpoint_config["output_dir"] = os.path.join(self.output_dir, 'checkpoints')
             logger.info(f"add timestamp to output_dir {self.checkpoint_config['output_dir']}")
 
         for attribute_name in dir(self):
@@ -194,10 +192,7 @@ class BaseConfig:
             self.profiler_timeline and self.profiler_memory
         ), f"ensure that only one profiling mode is enabled at a time"
 
-        self.profiler_output_dir = os.path.join(
-            self.profiler_output_dir, self.exp_name, datetime.now().strftime("%Y%m%d-%H%M%S")
-        )
-
+        self.profiler_output_dir = os.path.join(self.output_dir, 'profiler')
         os.environ["PROFILER_OUTPUT_DIR"] = self.profiler_output_dir
         if self.profiler_timeline:
             os.environ["PROFILER_TIMELINE"] = "1"
