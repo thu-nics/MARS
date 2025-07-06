@@ -12,9 +12,9 @@ hydra:
 
 exp_name: "agentic_pipeline"
 seed: 42
-logging_dir: ./output/logs
-output_dir: ./output
-render_save_dir: ./output/render
+# logging_dir: ./runs/logs
+output_dir: ./runs
+render_save_dir: ./runs/render
 system_envs:
   USE_MODELSCOPE: '1'
 
@@ -30,12 +30,12 @@ system_envs:
 #    - baseline
 
 track_with: tensorboard
-tracker_kwargs:
-  log_dir: /data/oss_bucket_0/yuzhao/llm/tensorboard/roll_exp/agentic_sokoban
+# tracker_kwargs:
+#   log_dir: ./runs/tensorboard
 
 num_gpus_per_node: 8
 
-max_steps: 1024
+max_steps: 256
 save_steps: 10000
 logging_steps: 1
 eval_steps: 10
@@ -143,16 +143,16 @@ custom_envs:
 train_env_manager:
   format_penalty: -0.15 # sokoban env penalty_for_step=-0.1
   max_env_num_per_worker: 16
-  env_groups: 16
+  env_groups: 512
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
   tags: [TicTacToe]
-  n_groups: [16] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  n_groups: [512] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
 
 val_env_manager:
   max_env_num_per_worker: 16
-  env_groups: 16
+  env_groups: 512
   group_size: 1 # should be set to 1 because val temperature is set to 0 and same prompt leads to same output
   tags: [TicTacToe]
-  n_groups: [16] #
+  n_groups: [512] #
 

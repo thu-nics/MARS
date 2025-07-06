@@ -12,9 +12,9 @@ hydra:
 
 exp_name: "agentic_pipeline"
 seed: 42
-logging_dir: ./output/logs
-output_dir: ./output
-render_save_dir: ./output/render
+# logging_dir: ./runs/logs
+output_dir: ./runs
+render_save_dir: ./runs/render
 
 #track_with: wandb
 #tracker_kwargs:
@@ -28,18 +28,18 @@ render_save_dir: ./output/render
 #    - baseline
 
 track_with: tensorboard
-tracker_kwargs:
-  log_dir: /data/oss_bucket_0/yali/llm/tensorboard/roll_exp/agentic_tictactoe
+# tracker_kwargs:
+  # log_dir: ./runs/tensorboard
 
-num_gpus_per_node: 2
+num_gpus_per_node: 8
 
-max_steps: 2
+max_steps: 10
 save_steps: 10000
 logging_steps: 1
 eval_steps: 10
 resume_from_checkpoint: false
 
-rollout_batch_size: 4
+rollout_batch_size: 16
 sequence_length: 8192
 
 reward_clip: 20
@@ -52,7 +52,7 @@ init_kl_coef: 0.0
 whiten_advantages: true
 entropy_loss_coef: 0
 
-pretrain: Qwen/Qwen2.5-0.5B-Instruct
+pretrain: Qwen/Qwen2.5-VL-3B-Instruct
 
 actor_infer:
   model_args:
@@ -74,7 +74,7 @@ actor_infer:
       gpu_memory_utilization: 0.8
       block_size: 16
       load_format: auto # should set 'auto' here, because default load_format is 'dummy'
-  device_mapping: list(range(0,2))
+  device_mapping: list(range(0,8))
 
 enable_response_mask: True
 action_sep: "||"
@@ -108,8 +108,8 @@ custom_envs:
 train_env_manager:
   format_penalty: -0.15 # sokoban env penalty_for_step=-0.1
   max_env_num_per_worker: 16
-  env_groups: 4
+  env_groups: 16
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
   tags: [TicTacToe]
-  n_groups: [4] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  n_groups: [16] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation

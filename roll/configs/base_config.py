@@ -161,16 +161,15 @@ class BaseConfig:
             )
             self.response_length = None
 
-        if self.track_with == "tensorboard":
-            self.tracker_kwargs["log_dir"] = os.path.join(
-                self.tracker_kwargs.get("log_dir", self.output_dir), self.exp_name, datetime.now().strftime("%Y%m%d-%H%M%S")
-            )
-            logger.info(f"add timestamp to tensorboard log_dir {self.tracker_kwargs['log_dir']}")
-
-        self.logging_dir = os.path.join(self.logging_dir, self.exp_name)
+        self.output_dir = os.path.join(self.output_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
+        self.logging_dir = os.path.join(self.output_dir, "logs")
         logger.info(f"add exp_name to logging_dir {self.logging_dir}")
         os.environ["ROLL_LOG_DIR"] = self.logging_dir
         get_logger()
+
+        if self.track_with == "tensorboard":
+            self.tracker_kwargs["log_dir"] = os.path.join(self.output_dir, "tensorboard")
+            logger.info(f"add timestamp to tensorboard log_dir {self.tracker_kwargs['log_dir']}")
 
         if self.model_download_type is not None:
             os.environ["MODEL_DOWNLOAD_TYPE"] = self.model_download_type

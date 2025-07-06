@@ -325,6 +325,7 @@ class EnvManager:
                      "llm_response": llm_response,
                      "actions": actions,
                      }
+        # print("env_input: ", env_input)
         return env_input
 
     def formulate_rollouts(self):
@@ -333,6 +334,7 @@ class EnvManager:
         2. 每个rollout 应该是一个List[Dict]
         3. 每个Dict 应该是一个step的信息
         """
+        print("Full rollout: ", self.rollout_cache['history'])
         llm_input_texts, messages_list = self._format_messages(
             env_output=self.rollout_cache,
             prepare_for_update=True,
@@ -469,7 +471,7 @@ class EnvManager:
             mapped_actions = [rev_action_lookup[action] for action in actions if action in rev_action_lookup]
         
         legal_actions = entry['env'].get_all_actions()
-        mapped_actions = [action for action in mapped_actions if action in legal_actions]
+        mapped_actions = [action for action in mapped_actions if action in legal_actions.values()]
         if len(mapped_actions) == 0 and random_when_no_valid_actions:
             mapped_actions = [random.choice(list(legal_actions.values()))]
             env_input['actions'] = mapped_actions
