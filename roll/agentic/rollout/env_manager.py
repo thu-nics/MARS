@@ -476,8 +476,8 @@ class EnvManager:
             mapped_actions = [random.choice(list(legal_actions.values()))]
             env_input['actions'] = mapped_actions
             env_input['llm_response'] = env_input['llm_response'].split("<answer>")[0] +\
-                                        "<answer>" + random.choice(list(legal_actions.values())) +\
-                                        " (randomly taken due to wrong response format)" + "</answer>"
+                                        "<answer>" + mapped_actions[0] + "</answer>"
+                                        # " (randomly taken due to wrong response format)" + "</answer>"
         return mapped_actions, env_input
 
     def _execute_actions(self, env, actions):
