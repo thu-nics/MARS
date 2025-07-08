@@ -15,6 +15,8 @@ seed: 42
 # logging_dir: ./runs/logs
 # output_dir: ./runs
 # render_save_dir: ./runs/render
+system_envs:
+  USE_MODELSCOPE: '1'
 
 #track_with: wandb
 #tracker_kwargs:
@@ -52,7 +54,7 @@ init_kl_coef: 0.0
 whiten_advantages: true
 entropy_loss_coef: 0
 
-pretrain: Qwen/Qwen2.5-VL-3B-Instruct
+pretrain: /mnt/h_public/algm/models/Qwen3-4B
 
 actor_infer:
   model_args:
@@ -67,7 +69,7 @@ actor_infer:
     temperature: 0.99
     num_return_sequences: 1
   data_args:
-    template: qwen2_5
+    template: qwen3
   strategy_args:
     strategy_name: vllm
     strategy_config:

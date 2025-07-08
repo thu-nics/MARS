@@ -184,12 +184,7 @@ class EnvManager:
 
         # execute actions in env
         valid_actions, env_input = self._extract_map_valid_actions(entry, env_input)
-
         acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(entry['env'], valid_actions[:actions_left_before])
-
-        if len(valid_actions) != len(env_input['actions']) or not valid_actions:
-            self.rollout_cache["penalty"] += self.worker_config.format_penalty
-
         status, history = self._log_env_state(entry['status'], self.rollout_cache['history'],
                                               entry['env'].render(), entry['env'].get_all_actions(), entry['max_actions_per_traj'], executed_actions,
                                               valid_actions, acc_reward, turn_done, turn_info, env_input)
@@ -325,7 +320,6 @@ class EnvManager:
                      "llm_response": llm_response,
                      "actions": actions,
                      }
-        # print("env_input: ", env_input)
         return env_input
 
     def formulate_rollouts(self):
@@ -334,11 +328,13 @@ class EnvManager:
         2. 每个rollout 应该是一个List[Dict]
         3. 每个Dict 应该是一个step的信息
         """
-        print("Full rollout: ", self.rollout_cache['history'])
+        print("rollout cache: ", self.rollout_cache)
         llm_input_texts, messages_list = self._format_messages(
             env_output=self.rollout_cache,
             prepare_for_update=True,
             use_raw_llm_response=False)
+        print("llm_input_texts: ", llm_input_texts)
+        print("messages_list: ", messages_list)
         inputs = self.tokenizer(llm_input_texts, return_tensors="pt", padding=True, padding_side="left",
                                 truncation=False)
         input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
@@ -398,6 +394,7 @@ class EnvManager:
         llm_inputs.batch["scores"] = score_tensor
         # for llm raw response
         llm_raw_text_list, _ = self._format_messages(env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=True)
+        print("llm_raw_text_list: ", llm_raw_text_list)
         llm_inputs.non_tensor_batch['turn_scores'] = np.array(scores, dtype=object)
         llm_inputs.non_tensor_batch['episode_scores'] = np.array(episode_scores, dtype=object)
         llm_inputs.non_tensor_batch['llm_raw_text_list'] = np.array(llm_raw_text_list, dtype=object)
@@ -411,7 +408,6 @@ class EnvManager:
         custom_metric = {}
 
         for turn in self.rollout_cache['history']:
-            # print("format_rollouts turn: ", turn)
             for k, v in turn.get('info', {}).items():
                 if k == 'success':
                     continue
@@ -427,7 +423,6 @@ class EnvManager:
         env_metric["env/response_length"] = response_length
         self.rollout_cache['metrics'] = env_metric
         llm_inputs.meta_info = {"metrics": env_metric}
-        # print("llm_inputs: ", llm_inputs)
         return llm_inputs
 
 
@@ -458,7 +453,7 @@ class EnvManager:
         history.append(entry)
         return history
 
-    def _extract_map_valid_actions(self, entry: Dict, env_input: Dict, random_when_no_valid_actions: bool = True):
+    def _extract_map_valid_actions(self, entry: Dict, env_input: Dict):
         """extract valid actions from the action lookup table (if exists)"""
         actions = env_input['actions']
         mapped_actions = []
@@ -472,8 +467,12 @@ class EnvManager:
         
         legal_actions = entry['env'].get_all_actions()
         mapped_actions = [action for action in mapped_actions if action in legal_actions.values()]
-        if len(mapped_actions) == 0 and random_when_no_valid_actions:
-            mapped_actions = [random.choice(list(legal_actions.values()))]
+        if len(mapped_actions) != 1:
+            self.rollout_cache["penalty"] += self.worker_config.format_penalty
+            if len(mapped_actions) == 0:
+                mapped_actions = [random.choice(list(legal_actions.values()))]
+            else:
+                mapped_actions = [mapped_actions[0]]
             env_input['actions'] = mapped_actions
             env_input['llm_response'] = env_input['llm_response'].split("<answer>")[0] +\
                                         "<answer>" + mapped_actions[0] + "</answer>"
@@ -523,13 +522,16 @@ class EnvManager:
             messages[-1]["content"] += turn_idx_content
             if "state" in content:
                 FORMAT_PROMPT = "<think> [your thoughts] </think> <answer> [your action] </answer>" if self.pipeline_config.enable_think else "<answer> [your action] </answer>"
+                move = content['legal_actions'][list(content['legal_actions'].keys())[0]]
+                FORMAT_PROMPT_EXAMPLE = f"<think> My best move is {move}. </think> <answer> {move} </answer>" if self.pipeline_config.enable_think else f"<answer> {move} </answer>"
                 LENGTH_PROMPT = f"Max response length: {self.pipeline_config.custom_envs[self.env_entry['tag']]['max_tokens']} words (tokens)."
                 messages[-1]["content"] += (
                     f"GAME STATE:\n{content['state']}\nYou have {content['actions_left']} actions left.\n\n"
-                    f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}. "
+                    f"CURRENT LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}. "
                     f"{self.env_entry['env'].get_prompt(mode='action')}\n\n"
                     f"FORMAT INSTRUCTIONS:\n always output {FORMAT_PROMPT} with no extra text. "
-                    f"Strictly follow this format. Response that do not follow the format will lead to a random action. {LENGTH_PROMPT}\n\n"
+                    f"Strictly follow this format and choose only one action from the legal actions, e.g. {FORMAT_PROMPT_EXAMPLE}. "
+                    f"Response that do not follow the format will lead to a random action. {LENGTH_PROMPT}\n\n"
                 )
             if "llm_raw_response" in content:
                 #       改成actions合理吗？
@@ -537,7 +539,8 @@ class EnvManager:
                                  "content": content["llm_response"] if not use_raw_llm_response else content["llm_raw_response"]})
             if "reward" in content and not (prepare_for_update and idx == len(env_output["history"]) - 1):
                 # when prepare for update, we do not add the reward from the n+1 turn to the trajectory
-                reward_content = f"Reward:\n{content['reward']}\n"
+                # reward_content = f"Reward:\n{content['reward']}\n"
+                reward_content = ''
                 messages.append({"role": "user", "content": reward_content})
 
         # NOTE: this assertion is important for loss mask computation

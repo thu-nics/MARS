@@ -42,14 +42,13 @@ class TicTacToe(BaseDiscreteActionEnv):
             return self.reset(next_seed)
 
     def step(self, action_str):
-        observations, rewards, done, info = self._step(action_str)
+        observations, _, done, info = self._step(action_str)
         # If the opponent is random, we need to let the opponent take action
         if self.current_player == 1 and self.random_opponent and not done:
-            observations, _rewards, done, info = self._step(random.choice(list(self.get_all_actions().values())))
-            rewards += _rewards
-            reward = rewards[self.current_player]
-        else:
-            reward = rewards[(self.current_player + 1) % 2]
+            observations, _, done, info = self._step(random.choice(list(self.get_all_actions().values())))
+        reward = 0
+        if done:
+            reward = self.state.returns()[0]
         return observations, reward, done, info
 
     def _step(self, action_str):
@@ -86,7 +85,8 @@ class TicTacToe(BaseDiscreteActionEnv):
                 "3. The player who first places three of their marks in a horizontal, vertical, or diagonal line wins.\n"
                 "4. If all cells are filled and no player wins, the game ends in a draw."
                 )
-        mark = "X" if self.current_player == 0 else "O"
+        # mark = "X" if self.current_player == 0 else "O"
+        mark = "X"
         user_prompt = (
             f"GAME RULES:\n{rules}\n\n"
             f"PLAYER INFORMATION:\nYour mark is {mark}."
