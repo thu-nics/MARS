@@ -521,17 +521,18 @@ class EnvManager:
             turn_idx_content = f"\n\nTurn {idx + 1}:\n\n"
             messages[-1]["content"] += turn_idx_content
             if "state" in content:
-                FORMAT_PROMPT = "<think> [your thoughts] </think> <answer> [your action] </answer>" if self.pipeline_config.enable_think else "<answer> [your action] </answer>"
+                FORMAT_PROMPT = "<think>[your thoughts]</think><answer>[your action]</answer>" if self.pipeline_config.enable_think else "<answer>[your action]</answer>"
                 move = content['legal_actions'][list(content['legal_actions'].keys())[0]]
-                FORMAT_PROMPT_EXAMPLE = f"<think> My best move is {move}. </think> <answer> {move} </answer>" if self.pipeline_config.enable_think else f"<answer> {move} </answer>"
-                LENGTH_PROMPT = f"Max response length: {self.pipeline_config.custom_envs[self.env_entry['tag']]['max_tokens']} words (tokens)."
+                FORMAT_PROMPT_EXAMPLE = f"<think>I will take {move}</think><answer>{move}</answer>" if self.pipeline_config.enable_think else f"<answer>{move}</answer>"
                 messages[-1]["content"] += (
-                    f"GAME STATE:\n{content['state']}\nYou have {content['actions_left']} actions left.\n\n"
-                    f"CURRENT LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}. "
-                    f"{self.env_entry['env'].get_prompt(mode='action')}\n\n"
-                    f"FORMAT INSTRUCTIONS:\n always output {FORMAT_PROMPT} with no extra text. "
-                    f"Strictly follow this format and choose only one action from the legal actions, e.g. {FORMAT_PROMPT_EXAMPLE}. "
-                    f"Response that do not follow the format will lead to a random action. {LENGTH_PROMPT}\n\n"
+                    "GAME STATE:\n"
+                    f"{content['state']}\n{self.env_entry['env'].get_prompt(mode='state')}\n\n"
+                    "CURRENT LEGAL ACTIONS:\n"
+                    f"{', '.join(content['legal_actions'].values())}. {self.env_entry['env'].get_prompt(mode='action')}\n\n"
+                    "RESPONSE INSTRUCTIONS:\n"
+                    f"always choose only one action from the legal actions and output {FORMAT_PROMPT} with no extra text. "
+                    f"For example, {FORMAT_PROMPT_EXAMPLE}. "
+                    "Strictly follow this format. Response that do not meet the format will lead to a random action."
                 )
             if "llm_raw_response" in content:
                 #       改成actions合理吗？

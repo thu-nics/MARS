@@ -98,17 +98,15 @@ class TicTacToe(BaseDiscreteActionEnv):
         return prefix_prompt
 
     def _get_state_prompt(self):
-        all_actions = ", ".join(list(self.get_all_actions().values()))
         state_prompt = (
-            f"GAME STATE:\n{self.render(mode='text')}\n\n"
-            f"LEGAL ACTIONS:\n{all_actions}."
+            "This is the current snapshot of the board, "
+            "where 'X' and 'O' are the marks of the two players, and '_' represents empty cells."
         )
         return state_prompt
 
     def _get_action_prompt(self):
         action_prompt = (
-            "Each action is represented as <{mark}({row},{column})>, "
-            "where {mark} is your mark, "
+            "Each action is represented as <{mark}({row},{column})>, where {mark} is your mark, "
             "and {row} and {column} are integers indicating the row and column of the cell to place your mark."
         )
         return action_prompt
@@ -269,22 +267,6 @@ if __name__ == "__main__":
             {"role": "system", "content": prompt['system']},
             {"role": "user", "content": prompt['user']}
         ]
-        state_prompt = env.get_prompt(mode="state")
-        if isinstance(state_prompt, str):
-            prompt[1]['content'] += f"\n\n{state_prompt}"
-        mark = "X" if env.current_player == 0 else "O"
-        instructions = dedent(
-            f"""\
-            Now it is your turn to choose an action. You should output your action in the following JSON format:
-            ```json
-            {{
-                "action": "{mark}(i,j)"
-            }}
-            ```
-            where i is the row index and j is the column index."""
-        )
-        prompt[1]['content'] += f"\n\n{instructions}"
-        
         print(f"========== Step {step + 1} ==========")
         print(f"System prompt: \n{prompt[0]['content']}")
         print(f"User prompt: \n{prompt[1]['content']}\n")
