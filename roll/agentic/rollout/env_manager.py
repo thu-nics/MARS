@@ -183,8 +183,13 @@ class EnvManager:
         actions_left_before = entry['max_actions_per_traj'] - entry['status'].num_actions
 
         # execute actions in env
-        valid_actions, env_input = self._extract_map_valid_actions(entry, env_input)
-        acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(entry['env'], valid_actions[:actions_left_before])
+        valid_actions, lose_for_wrong_format = self._extract_map_valid_actions(entry, env_input['actions'])
+        if lose_for_wrong_format:
+            _, acc_reward, turn_done, turn_info = entry['env'].get_losing_state()
+            executed_actions = []
+        else:
+            acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(entry['env'], valid_actions[:actions_left_before])
+            acc_reward -= self.worker_config.format_penalty
         status, history = self._log_env_state(entry['status'], self.rollout_cache['history'],
                                               entry['env'].render(), entry['env'].get_all_actions(), entry['max_actions_per_traj'], executed_actions,
                                               valid_actions, acc_reward, turn_done, turn_info, env_input)
@@ -453,9 +458,8 @@ class EnvManager:
         history.append(entry)
         return history
 
-    def _extract_map_valid_actions(self, entry: Dict, env_input: Dict):
+    def _extract_map_valid_actions(self, entry: Dict, actions: List[str]):
         """extract valid actions from the action lookup table (if exists)"""
-        actions = env_input['actions']
         mapped_actions = []
         action_lookup = getattr(entry['env'].config, 'action_lookup', None)
         if action_lookup is None:
@@ -467,17 +471,11 @@ class EnvManager:
         
         legal_actions = entry['env'].get_all_actions()
         mapped_actions = [action for action in mapped_actions if action in legal_actions.values()]
-        if len(mapped_actions) != 1:
-            self.rollout_cache["penalty"] += self.worker_config.format_penalty
-            if len(mapped_actions) == 0:
-                mapped_actions = [random.choice(list(legal_actions.values()))]
-            else:
-                mapped_actions = [mapped_actions[0]]
-            env_input['actions'] = mapped_actions
-            env_input['llm_response'] = env_input['llm_response'].split("<answer>")[0] +\
-                                        "<answer>" + mapped_actions[0] + "</answer>"
-                                        # " (randomly taken due to wrong response format)" + "</answer>"
-        return mapped_actions, env_input
+        illegal_actions = [action for action in actions if action not in legal_actions.values()]
+        lose_for_wrong_format = False
+        if len(mapped_actions) != 1 or len(illegal_actions) > 0:
+            lose_for_wrong_format = True
+        return mapped_actions, lose_for_wrong_format
 
     def _execute_actions(self, env, actions):
         acc_reward, turn_info, turn_done = 0, {}, False
@@ -523,16 +521,16 @@ class EnvManager:
             if "state" in content:
                 FORMAT_PROMPT = "<think>[your thoughts]</think><answer>[your action]</answer>" if self.pipeline_config.enable_think else "<answer>[your action]</answer>"
                 move = content['legal_actions'][list(content['legal_actions'].keys())[0]]
-                FORMAT_PROMPT_EXAMPLE = f"<think>I will take {move}</think><answer>{move}</answer>" if self.pipeline_config.enable_think else f"<answer>{move}</answer>"
+                FORMAT_PROMPT_EXAMPLE = f"<think>I will take {move} because ...</think><answer>{move}</answer>" if self.pipeline_config.enable_think else f"<answer>{move}</answer>"
                 messages[-1]["content"] += (
                     "GAME STATE:\n"
                     f"{content['state']}\n{self.env_entry['env'].get_prompt(mode='state')}\n\n"
                     "CURRENT LEGAL ACTIONS:\n"
                     f"{', '.join(content['legal_actions'].values())}. {self.env_entry['env'].get_prompt(mode='action')}\n\n"
                     "RESPONSE INSTRUCTIONS:\n"
-                    f"always choose only one action from the legal actions and output {FORMAT_PROMPT} with no extra text. "
+                    f"Always choose only one action from the legal actions and output {FORMAT_PROMPT} with no extra text. "
                     f"For example, {FORMAT_PROMPT_EXAMPLE}. "
-                    "Strictly follow this format. Response that do not meet the format will lead to a random action."
+                    "Strictly follow this format. Response that do not meet the format will lead to losing the game immediately."
                 )
             if "llm_raw_response" in content:
                 #       改成actions合理吗？

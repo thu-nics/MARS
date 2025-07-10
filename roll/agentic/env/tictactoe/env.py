@@ -142,6 +142,13 @@ class TicTacToe(BaseDiscreteActionEnv):
         winner = int(np.argmax(returns)) if returns[0] != returns[1] else -1
         return {"player_0_return": returns[0], "player_1_return": returns[1], "winner": winner}
 
+    def get_losing_state(self):
+        observation = self.render()
+        reward = -1
+        done = True
+        info = {"player_0_return": -1, "player_1_return": 1, "winner": 1}
+        return observation, reward, done, info
+
     def render(self, mode=None):
         render_mode = mode if mode is not None else self.render_mode
         if render_mode == "text":
