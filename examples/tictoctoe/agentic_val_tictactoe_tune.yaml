@@ -68,11 +68,11 @@ actor_train:
   training_args:
     lr_scheduler_type: cosine_with_min_lr
     learning_rate: 5e-7
-    weight_decay: 0.05
+    weight_decay: 0.1
     adam_beta1: 0.9
     adam_beta2: 0.95
     per_device_train_batch_size: 2
-    gradient_accumulation_steps: 16
+    gradient_accumulation_steps: 4
     warmup_steps: 5
   data_args:
     template: qwen3
