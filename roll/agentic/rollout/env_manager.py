@@ -189,7 +189,7 @@ class EnvManager:
             executed_actions = []
         else:
             acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(entry['env'], valid_actions[:actions_left_before])
-            acc_reward -= self.worker_config.format_penalty
+            acc_reward += self.worker_config.format_penalty
         status, history = self._log_env_state(entry['status'], self.rollout_cache['history'],
                                               entry['env'].render(), entry['env'].get_all_actions(), entry['max_actions_per_traj'], executed_actions,
                                               valid_actions, acc_reward, turn_done, turn_info, env_input)
@@ -338,8 +338,8 @@ class EnvManager:
             env_output=self.rollout_cache,
             prepare_for_update=True,
             use_raw_llm_response=False)
-        print("llm_input_texts: ", llm_input_texts)
-        print("messages_list: ", messages_list)
+        # print("llm_input_texts: ", llm_input_texts)
+        # print("messages_list: ", messages_list)
         inputs = self.tokenizer(llm_input_texts, return_tensors="pt", padding=True, padding_side="left",
                                 truncation=False)
         input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
@@ -399,7 +399,7 @@ class EnvManager:
         llm_inputs.batch["scores"] = score_tensor
         # for llm raw response
         llm_raw_text_list, _ = self._format_messages(env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=True)
-        print("llm_raw_text_list: ", llm_raw_text_list)
+        # print("llm_raw_text_list: ", llm_raw_text_list)
         llm_inputs.non_tensor_batch['turn_scores'] = np.array(scores, dtype=object)
         llm_inputs.non_tensor_batch['episode_scores'] = np.array(episode_scores, dtype=object)
         llm_inputs.non_tensor_batch['llm_raw_text_list'] = np.array(llm_raw_text_list, dtype=object)
@@ -421,7 +421,8 @@ class EnvManager:
                 custom_metric[k].append(float(v))
 
         for k, v in custom_metric.items():
-            env_metric[k] = np.sum(v) / len(self.rollout_cache['history'])
+            # env_metric[k] = np.sum(v) / len(self.rollout_cache['history'])
+            env_metric[k] = np.sum(v)
 
         self.rollout_cache['history'][-1]['metrics'] = custom_metric
         env_metric = {f"env/{entry['tag']}/{k}": v for k, v in env_metric.items()}
@@ -511,26 +512,17 @@ class EnvManager:
             # when prepare for update, we do not add the state from the n+1 turn to the trajectory
             env_output['history'] = env_output['history'][:-1]
         messages = [
-            {"role": "system", "content": self.env_entry['env'].get_prompt(mode="prefix")['system']},
-            {"role": "user", "content": self.env_entry['env'].get_prompt(mode="prefix")['user']}
+            {"role": "system", "content": self.env_entry['env'].get_prompt(mode="prefix", think=self.pipeline_config.enable_think)['system']},
+            {"role": "user", "content": self.env_entry['env'].get_prompt(mode="prefix", think=self.pipeline_config.enable_think)['user']}
         ]
 
         for idx, content in enumerate(env_output["history"]):
-            turn_idx_content = f"\n\nTurn {idx + 1}:\n\n"
+            turn_idx_content = f"\n\nYour {idx + 1} turn:\n\n"
             messages[-1]["content"] += turn_idx_content
             if "state" in content:
-                FORMAT_PROMPT = "<think>[your thoughts]</think><answer>[your action]</answer>" if self.pipeline_config.enable_think else "<answer>[your action]</answer>"
-                move = content['legal_actions'][list(content['legal_actions'].keys())[0]]
-                FORMAT_PROMPT_EXAMPLE = f"<think>I will take {move} because ...</think><answer>{move}</answer>" if self.pipeline_config.enable_think else f"<answer>{move}</answer>"
                 messages[-1]["content"] += (
-                    "GAME STATE:\n"
-                    f"{content['state']}\n{self.env_entry['env'].get_prompt(mode='state')}\n\n"
-                    "CURRENT LEGAL ACTIONS:\n"
-                    f"{', '.join(content['legal_actions'].values())}. {self.env_entry['env'].get_prompt(mode='action')}\n\n"
-                    "RESPONSE INSTRUCTIONS:\n"
-                    f"Always choose only one action from the legal actions and output {FORMAT_PROMPT} with no extra text. "
-                    f"For example, {FORMAT_PROMPT_EXAMPLE}. "
-                    "Strictly follow this format. Response that do not meet the format will lead to losing the game immediately."
+                    f"GAME STATE:\n{content['state']}\n\n"
+                    f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}.\n\n"
                 )
             if "llm_raw_response" in content:
                 #       改成actions合理吗？

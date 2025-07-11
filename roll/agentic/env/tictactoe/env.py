@@ -63,9 +63,9 @@ class TicTacToe(BaseDiscreteActionEnv):
         info = self._get_info()
         return observations, rewards, done, info
 
-    def get_prompt(self, mode="prefix"):
+    def get_prompt(self, mode="prefix", think=True):
         if mode == "prefix":
-            prefix_prompt = self._get_prefix_prompt()
+            prefix_prompt = self._get_prefix_prompt(think)
             return prefix_prompt
         elif mode == "state":
             state_prompt = self._get_state_prompt()
@@ -76,7 +76,7 @@ class TicTacToe(BaseDiscreteActionEnv):
         else:
             raise ValueError(f"Invalid prompt mode: {mode}")
 
-    def _get_prefix_prompt(self):
+    def _get_prefix_prompt(self, think=True):
         system_prompt = "You are an AI agent that makes optimal decisions to win in the game of tic-tac-toe."
         rules = (
                 "1. Tic-tac-toe is a two-player board game played on a three-by-three grid. "
@@ -87,9 +87,30 @@ class TicTacToe(BaseDiscreteActionEnv):
                 )
         # mark = "X" if self.current_player == 0 else "O"
         mark = "X"
+        opponent_mark = "O" if mark == "X" else "X"
+        information = (
+            f"1. Your mark is {mark}. You are competing with another player contolling the mark {opponent_mark}.\n"
+            "2. In each of your turns:\n"
+            "   a. The game state demonstrates the current board with a three-line text grid, where 'X' and 'O' are the marks of the two players, and '_' represents empty cells.\n"
+            "   b. You need to chose an action to place your mark in an empty cell, based on the given game state and the history of your decisions.\n"
+            "   c. All legal actions are provided in the format of <{mark}({row},{column})>, where {mark} is your mark, "
+            "and {row} and {column} are integers indicating the row and column of the cell to place your mark."
+        )
+        if think:
+            FORMAT_PROMPT = "<think>[your thinking]</think><answer>[your action]</answer>"
+            FORMAT_PROMPT_EXAMPLE = f"<think>Okay, let's see. I'm playing a game of tic-tac-toe. This is my first turn. I will take <X(0,0)> because ...</think><answer><X(0,0)></answer>"
+        else:
+            FORMAT_PROMPT = "<answer>[your action]</answer>"
+            FORMAT_PROMPT_EXAMPLE = f"<answer><X(0,0)></answer>"
+        instructions = (
+            f"Always choose only one action from the legal actions and output {FORMAT_PROMPT} with no extra text. "
+            f"For example, {FORMAT_PROMPT_EXAMPLE}. "
+            "Strictly follow this format. Response that do not meet the format will lead to losing the game immediately."
+        )
         user_prompt = (
             f"GAME RULES:\n{rules}\n\n"
-            f"PLAYER INFORMATION:\nYour mark is {mark}."
+            f"PLAYER INFORMATION:\n{information}\n\n"
+            f"RESPONSE INSTRUCTIONS:\n{instructions}"
         )
         prefix_prompt = {
             "system": system_prompt,
@@ -140,13 +161,23 @@ class TicTacToe(BaseDiscreteActionEnv):
             return {}
         returns = self.state.returns()
         winner = int(np.argmax(returns)) if returns[0] != returns[1] else -1
-        return {"player_0_return": returns[0], "player_1_return": returns[1], "winner": winner}
+        return {
+            "player_0_return": returns[0],
+            "player_1_return": returns[1],
+            "winner": winner,
+            "lose_for_wrong_format": 0
+        }
 
     def get_losing_state(self):
         observation = self.render()
         reward = -1
         done = True
-        info = {"player_0_return": -1, "player_1_return": 1, "winner": 1}
+        info = {
+            "player_0_return": -1,
+            "player_1_return": 1,
+            "winner": 1,
+            "lose_for_wrong_format": 1
+        }
         return observation, reward, done, info
 
     def render(self, mode=None):
