@@ -28,6 +28,7 @@ def register_chat_template(key, **kwargs):
 
 
 def get_chat_template(key, tokenizer: "PreTrainedTokenizer"):
+    print(f"Using chat template: {key}")
     if key not in chat_templates:
         raise ValueError(f"chat template {key} not found")
     return partial(chat_templates[key], tokenizer)

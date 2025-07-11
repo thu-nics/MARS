@@ -89,28 +89,29 @@ class TicTacToe(BaseDiscreteActionEnv):
         mark = "X"
         opponent_mark = "O" if mark == "X" else "X"
         information = (
-            f"1. Your mark is {mark}. You are competing with another player contolling the mark {opponent_mark}.\n"
+            f"1. Your mark is {mark}. You are competing with another player controlling the mark {opponent_mark}.\n"
             "2. In each of your turns:\n"
             "   a. The game state demonstrates the current board with a three-line text grid, where 'X' and 'O' are the marks of the two players, and '_' represents empty cells.\n"
             "   b. You need to chose an action to place your mark in an empty cell, based on the given game state and the history of your decisions.\n"
-            "   c. All legal actions are provided in the format of <{mark}({row},{column})>, where {mark} is your mark, "
+            f"   c. All legal actions are provided in the format of `<{mark}({{row}},{{column}})>`, where `{mark}` is your mark, "
             "and {row} and {column} are integers indicating the row and column of the cell to place your mark."
         )
-        if think:
-            FORMAT_PROMPT = "<think>[your thinking]</think><answer>[your action]</answer>"
-            FORMAT_PROMPT_EXAMPLE = f"<think>Okay, let's see. I'm playing a game of tic-tac-toe. This is my first turn. I will take <X(0,0)> because ...</think><answer><X(0,0)></answer>"
-        else:
-            FORMAT_PROMPT = "<answer>[your action]</answer>"
-            FORMAT_PROMPT_EXAMPLE = f"<answer><X(0,0)></answer>"
+        # if think:
+        #     FORMAT_PROMPT = "<think>[your thinking]</think><answer>[your action]</answer>"
+        #     FORMAT_PROMPT_EXAMPLE = f"<think>Okay, let's see. I'm playing a game of tic-tac-toe. This is my first turn. I will take <X(0,0)> because ...</think><answer><X(0,0)></answer>"
+        # else:
+        FORMAT_PROMPT = "<answer>{your chosen action}</answer>"
+        FORMAT_PROMPT_EXAMPLE = f"<answer><X(0,0)></answer>"
         instructions = (
             f"Always choose only one action from the legal actions and output {FORMAT_PROMPT} with no extra text. "
-            f"For example, {FORMAT_PROMPT_EXAMPLE}. "
-            "Strictly follow this format. Response that do not meet the format will lead to losing the game immediately."
+            f"For example, `{FORMAT_PROMPT_EXAMPLE}`. "
+            "Strictly follow this format. Responses that do not follow the format will result in immediate loss of the game.\n"
+            "You don't have too much time to think. Think shortly. Do not overthink."
         )
         user_prompt = (
             f"GAME RULES:\n{rules}\n\n"
             f"PLAYER INFORMATION:\n{information}\n\n"
-            f"RESPONSE INSTRUCTIONS:\n{instructions}"
+            f"RESPONSE INSTRUCTIONS:\n{instructions}\n\n"
         )
         prefix_prompt = {
             "system": system_prompt,
