@@ -36,6 +36,7 @@ def get_chat_template(key, tokenizer: "PreTrainedTokenizer"):
 
 @register_chat_template("native")
 @register_chat_template("qwen2_5")
+@register_chat_template("qwen3")
 def native_chat_template(tokenizer: "PreTrainedTokenizer", conversation, tools=None, documents=None, **kwargs):
     kwargs["tokenize"] = False
     kwargs["add_generation_prompt"] = True

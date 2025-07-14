@@ -29,9 +29,11 @@ from roll.utils.logging import get_logger
 base agentic codes reference: https://github.com/RAGEN-AI/RAGEN/blob/main/ragen/llm_agent/es_manager.py
 """
 
+
 @dataclass
 class EnvStatus:
     """Status of an environment"""
+
     truncated: bool = False  # done but not success
     terminated: bool = False  # done and success
     num_actions: int = 0  # current action step (single action)
@@ -43,8 +45,13 @@ class EnvStatus:
     def done(self):
         return self.truncated or self.terminated
 
-def get_masks_and_scores(input_ids: torch.Tensor, tokenizer: AutoTokenizer, all_scores: List[List[float]] = None,
-                         use_turn_scores: bool = False):
+
+def get_masks_and_scores(
+    input_ids: torch.Tensor,
+    tokenizer: AutoTokenizer,
+    all_scores: List[List[float]] = None,
+    use_turn_scores: bool = False,
+):
     """
     input_ids: shape (bsz, seq_len)
     all_scores: list[list[float], 存储每个env每轮的reward
@@ -59,7 +66,7 @@ def get_masks_and_scores(input_ids: torch.Tensor, tokenizer: AutoTokenizer, all_
     turn_indicators = torch.cumsum(turn_starts, dim=-1)
 
     response_mask = (turn_indicators % 2 == 1) & (turn_indicators > 1)  # only learns all assistant turns
-    non_prompt_mask = (turn_indicators > 2)  # learns everything after system prompt + user prompts
+    non_prompt_mask = turn_indicators > 2  # learns everything after system prompt + user prompts
 
     # turn text: '<|im_start|>assistant\n<answer>Right</answer><|im_end|>'
     # <|im_start|>assistant\n 应该mask掉才对，保留<|im_end|>
@@ -102,18 +109,20 @@ def get_masks_and_scores(input_ids: torch.Tensor, tokenizer: AutoTokenizer, all_
 
 
 class EnvManager:
-    def __init__(self,
-                 worker_config: EnvManagerConfig,
-                 pipeline_config: AgenticConfig,
-                 env_config: Dict,
-                 tokenizer: PreTrainedTokenizer,
-                 generate_scheduler,
-                 input_queue: Queue,
-                 output_queue: Queue,
-                 thread_lock: Lock,
-                 processor: Optional[ProcessorMixin] = None,
-                 collator: Optional[callable] = None,
-                 mode='train'):
+    def __init__(
+        self,
+        worker_config: EnvManagerConfig,
+        pipeline_config: AgenticConfig,
+        env_config: Dict,
+        tokenizer: PreTrainedTokenizer,
+        generate_scheduler,
+        input_queue: Queue,
+        output_queue: Queue,
+        thread_lock: Lock,
+        processor: Optional[ProcessorMixin] = None,
+        collator: Optional[callable] = None,
+        mode="train",
+    ):
         """
         1. 一个EnvManager持有一个env实例: 执行env.reset, env.step, 管理rollout的状态
             group trajectory表达: group内的init state一致，依赖env_config 中的seed来控制, 一个group内env 对应episode的seed一致
@@ -140,12 +149,14 @@ class EnvManager:
         self.episode_id = 0
         self.process_input_queue_thread = None
         self.running = False
-        self.use_thread_lock = self.env_config.get("use_thread_lock", True) # 避免同时执行大量cpu操作, 可以通过env_config配置
+        self.use_thread_lock = self.env_config.get(
+            "use_thread_lock", True
+        )  # 避免同时执行大量cpu操作, 可以通过env_config配置
         self.thread_lock = thread_lock if self.use_thread_lock else nullcontext()
 
         self.env_entry = copy.deepcopy(self.env_config)
-        self.env_entry['env'] = REGISTERED_ENVS[self.env_entry['env_class']](self.env_entry['config'])
-        self.env_entry['status'] = EnvStatus()
+        self.env_entry["env"] = REGISTERED_ENVS[self.env_entry["env_class"]](self.env_entry["config"])
+        self.env_entry["status"] = EnvStatus()
 
         self.request_counter = GlobalCounter.options(
             name=f"EnvManagerRequestCounter",
@@ -156,57 +167,98 @@ class EnvManager:
 
     def reset(self):
         entry = self.env_entry
-        self.rollout_cache = {"env_id": entry['env_id'], "history": [], "group_id": entry['group_id'],
-                              "tag": entry['tag'], "penalty": 0, "frames": []}
+        self.rollout_cache = {
+            "env_id": entry["env_id"],
+            "history": [],
+            "group_id": entry["group_id"],
+            "tag": entry["tag"],
+            "penalty": 0,
+            "frames": [],
+        }
 
         seed = self.group_seed + self.episode_id
 
         with self.thread_lock:
-            entry['env'].reset(seed=seed)
+            entry["env"].reset(seed=seed)
 
-        entry['status'] = EnvStatus(seed=seed)
-        next_state = self._handle_mm_state(entry['env'].render())
+        entry["status"] = EnvStatus(seed=seed)
+        next_state = self._handle_mm_state(entry["env"].render())
 
         # update rollout cache
-        self.rollout_cache['history'] = self._update_cache_history(self.rollout_cache['history'],
-                                                                   next_state=next_state,
-                                                                   legal_actions=entry['env'].get_all_actions(),
-                                                                   actions_left=entry['max_actions_per_traj'],
-                                                                   num_actions_info=None)
+        self.rollout_cache["history"] = self._update_cache_history(
+            self.rollout_cache["history"],
+            next_state=next_state,
+            legal_actions=entry["env"].get_all_actions(),
+            actions_left=entry["max_actions_per_traj"],
+            num_actions_info=None,
+        )
         self.episode_id += 1
         return self.rollout_cache
+
+    def compute_length_penalty(self, token_length: int) -> float:
+        # (tzy) according to orignal design in kimi-1.5, it is better to use a batch of samples to compute min/max length.
+        # however, we don't have a batch of samples. moreover, we just want to penalize the length of the response to avoid overthinking.
+        # reward = 0.5 - (token_length - min_len) / (max_len - min_len)
+
+        # for response in format: `<answer>X({i},{j})</answer><|im_end|>`(0<=i,j<3), the minimum length is 11.
+        min_len = 11
+        max_len = 2000
+        reward = 0.0
+        # penalize the length of the response
+        reward = 1 - (token_length - min_len) / (max_len - min_len)
+        reward = min(0, reward)  # we also don't want to reward shorter responses.
+
+        if reward < 0:
+            reward *= 10  # scale to make it comparable with the winning rewards
+
+        return reward
 
     def step(self, llm_output: DataProto):
         env_input: Dict = self.get_env_input(llm_output)
 
         entry = self.env_entry
-        actions_left_before = entry['max_actions_per_traj'] - entry['status'].num_actions
+        actions_left_before = entry["max_actions_per_traj"] - entry["status"].num_actions
 
         # execute actions in env
-        valid_actions, lose_for_wrong_format = self._extract_map_valid_actions(entry, env_input['actions'])
+        valid_actions, lose_for_wrong_format = self._extract_map_valid_actions(entry, env_input["actions"])
         if lose_for_wrong_format:
-            _, acc_reward, turn_done, turn_info = entry['env'].get_losing_state()
+            _, acc_reward, turn_done, turn_info = entry["env"].get_losing_state()
             executed_actions = []
         else:
-            acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(entry['env'], valid_actions[:actions_left_before])
-            acc_reward += self.worker_config.format_penalty
-        status, history = self._log_env_state(entry['status'], self.rollout_cache['history'],
-                                              entry['env'].render(), entry['env'].get_all_actions(), entry['max_actions_per_traj'], executed_actions,
-                                              valid_actions, acc_reward, turn_done, turn_info, env_input)
+            acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(
+                entry["env"], valid_actions[:actions_left_before]
+            )
+            acc_reward -= self.worker_config.format_penalty
+
+        acc_reward += self.compute_length_penalty(env_input["token_length"])
+
+        status, history = self._log_env_state(
+            entry["status"],
+            self.rollout_cache["history"],
+            entry["env"].render(),
+            entry["env"].get_all_actions(),
+            entry["max_actions_per_traj"],
+            executed_actions,
+            valid_actions,
+            acc_reward,
+            turn_done,
+            turn_info,
+            env_input,
+        )
         status.step += 1
-        entry['status'] = status
+        entry["status"] = status
 
-        max_steps_per_traj = entry.get("max_steps_per_traj", entry['max_actions_per_traj'])
+        max_steps_per_traj = entry.get("max_steps_per_traj", entry["max_actions_per_traj"])
         if status.step >= max_steps_per_traj and not turn_done:
-            entry['status'].truncated = True
-            entry['status'].terminated = True
+            entry["status"].truncated = True
+            entry["status"].terminated = True
 
-        self.rollout_cache['history'] = history
+        self.rollout_cache["history"] = history
 
         if self.mode == "val":
-            frame = entry['env'].render(mode='rgb_array')
+            frame = entry["env"].render(mode="rgb_array")
             if isinstance(frame, np.ndarray):
-                self.rollout_cache['frames'].append(frame)
+                self.rollout_cache["frames"].append(frame)
 
         return status
 
@@ -214,19 +266,28 @@ class EnvManager:
         lm_input: DataProto = self.get_lm_input(env_output, prepare_for_update=False)
 
         generation_config = self.worker_config.generating_args.to_dict()
-        generation_config["max_new_tokens"] = min(generation_config["max_new_tokens"],
-                                                  max(self.pipeline_config.sequence_length - lm_input.batch['input_ids'].shape[1] - generation_config["max_new_tokens"], 1))
+        generation_config["max_new_tokens"] = min(
+            generation_config["max_new_tokens"],
+            max(
+                self.pipeline_config.sequence_length
+                - lm_input.batch["input_ids"].shape[1]
+                - generation_config["max_new_tokens"],
+                1,
+            ),
+        )
         if generation_config["max_new_tokens"] <= 1:
-            self.logger.warning(f"sequence_length = {self.pipeline_config.sequence_length} input_ids length = {lm_input.batch['input_ids'].shape[1]},"
-                        f"maybe you should increase the response_length")
+            self.logger.warning(
+                f"sequence_length = {self.pipeline_config.sequence_length} input_ids length = {lm_input.batch['input_ids'].shape[1]},"
+                f"maybe you should increase the response_length"
+            )
             return None
 
         gen_batch = lm_input.pop(
             batch_keys=["input_ids", "attention_mask", "position_ids"],
-            non_tensor_batch_keys=(["multi_modal_data"] if "multi_modal_data"
-                                   in lm_input.non_tensor_batch else []))
+            non_tensor_batch_keys=(["multi_modal_data"] if "multi_modal_data" in lm_input.non_tensor_batch else []),
+        )
         gen_batch.meta_info["generation_config"] = generation_config
-        gen_batch.meta_info['response_callback_fn'] = self.generate_scheduler.report_response.remote
+        gen_batch.meta_info["response_callback_fn"] = self.generate_scheduler.report_response.remote
         self.request_id = str(ray.get(self.request_counter.get_value.remote()))
         gen_batch.meta_info["request_id"] = self.request_id
         gen_batch.meta_info["src_rank"] = self.env_config["env_id"]
@@ -235,10 +296,9 @@ class EnvManager:
         if lm_output is not None:
             # 未被abort
             gen_batch.meta_info.pop("generation_config")
-            lm_input = lm_input.repeat(repeat_times=generation_config['num_return_sequences'])
+            lm_input = lm_input.repeat(repeat_times=generation_config["num_return_sequences"])
             lm_output.union(lm_input)
         return lm_output
-
 
     def run_rollout_loop(self, data: DataProto):
         """
@@ -257,7 +317,7 @@ class EnvManager:
         self.running = True
         self.episode_id = 0
 
-        self.group_seed = data.meta_info['seed'] + self.env_entry['group_seed']
+        self.group_seed = data.meta_info["seed"] + self.env_entry["group_seed"]
         env_output = self.reset()
 
         while self.running:
@@ -275,7 +335,8 @@ class EnvManager:
                 self.rollout_cache = None
                 if self.episode_id >= self.worker_config.max_traj_per_env:
                     self.logger.debug(
-                        f"env_id: {self.env_config['env_id']} max_traj_per_env {self.worker_config.max_traj_per_env} reached, stopping rollout loop")
+                        f"env_id: {self.env_config['env_id']} max_traj_per_env {self.worker_config.max_traj_per_env} reached, stopping rollout loop"
+                    )
                     break
                 env_output = self.reset()
 
@@ -284,47 +345,58 @@ class EnvManager:
     def get_lm_input(self, env_output, prepare_for_update: bool) -> DataProto:
         """"""
         llm_input_texts, messages_list = self._format_messages(
-            env_output=env_output,
-            prepare_for_update=prepare_for_update,
-            use_raw_llm_response=False)
-        inputs = self.tokenizer(llm_input_texts, return_tensors="pt", padding=True, padding_side="left",
-                                truncation=False)  # do not truncate here. Process later at TODO
+            env_output=env_output, prepare_for_update=prepare_for_update, use_raw_llm_response=False
+        )
+        inputs = self.tokenizer(
+            llm_input_texts, return_tensors="pt", padding=True, padding_side="left", truncation=False
+        )  # do not truncate here. Process later at TODO
         input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
         position_ids = attention_mask.cumsum(dim=-1)
         llm_inputs = DataProto()
-        llm_inputs.batch = TensorDict({
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "position_ids": position_ids,
-        }, batch_size=input_ids.shape[0])
-        llm_inputs.non_tensor_batch.update({
-            "env_ids": np.array([env_output["env_id"]], dtype=object),
-            "group_ids": np.array([env_output["group_id"]], dtype=object),
-            "messages_list": np.array(messages_list, dtype=object),
-            "tags": np.array([env_output["tag"]], dtype=object),
-        })
+        llm_inputs.batch = TensorDict(
+            {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+            },
+            batch_size=input_ids.shape[0],
+        )
+        llm_inputs.non_tensor_batch.update(
+            {
+                "env_ids": np.array([env_output["env_id"]], dtype=object),
+                "group_ids": np.array([env_output["group_id"]], dtype=object),
+                "messages_list": np.array(messages_list, dtype=object),
+                "tags": np.array([env_output["tag"]], dtype=object),
+            }
+        )
         return llm_inputs
 
     def get_env_input(self, lm_output: DataProto) -> Dict:
-        if lm_output.batch is not None and 'responses' in lm_output.batch.keys():
-            responses = self.tokenizer.batch_decode(
-                lm_output.batch['responses'],
-                skip_special_tokens=True
-            )
+        if lm_output.batch is not None and "responses" in lm_output.batch.keys():
+            responses = self.tokenizer.batch_decode(lm_output.batch["responses"], skip_special_tokens=True)
+            token_lengths = list(map(len, lm_output.batch["responses"]))
         else:  # dataproto has textual responses
-            responses = lm_output.non_tensor_batch['response_texts']
-        responses = ["<think>" + response if self.pipeline_config.enable_think else "<answer>" + response for
-                     response in responses]  # The LLM generation does not include <think> tags. Add them back here.
+            responses = lm_output.non_tensor_batch["response_texts"]
+            token_lengths = list(map(lambda x: len(self.tokenizer.encode(x)) + 1, responses))  # + 1 for eos token
 
-        env_ids = lm_output.non_tensor_batch['env_ids']
+        responses = [
+            "<think>" + response if self.pipeline_config.enable_think else "<answer>" + response
+            for response in responses
+        ]  # The LLM generation does not include <think> tags. Add them back here.
+
+        env_ids = lm_output.non_tensor_batch["env_ids"]
         env_id = env_ids[0]
         response = responses[0]
+        token_length = token_lengths[0]
         llm_response, actions = self._parse_response(response)
-        env_input = {"env_id": env_id,
-                     "llm_raw_response": response,
-                     "llm_response": llm_response,
-                     "actions": actions,
-                     }
+        env_input = {
+            "env_id": env_id,
+            "llm_raw_response": response,
+            "llm_response": llm_response,
+            "actions": actions,
+            # (tzy) use the token length information to compute length penalty reward.
+            "token_length": token_length,
+        }
         return env_input
 
     def formulate_rollouts(self):
@@ -335,53 +407,61 @@ class EnvManager:
         """
         print("rollout cache: ", self.rollout_cache)
         llm_input_texts, messages_list = self._format_messages(
-            env_output=self.rollout_cache,
-            prepare_for_update=True,
-            use_raw_llm_response=False)
+            env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=False
+        )
         # print("llm_input_texts: ", llm_input_texts)
         # print("messages_list: ", messages_list)
-        inputs = self.tokenizer(llm_input_texts, return_tensors="pt", padding=True, padding_side="left",
-                                truncation=False)
+        inputs = self.tokenizer(
+            llm_input_texts, return_tensors="pt", padding=True, padding_side="left", truncation=False
+        )
         input_ids, attention_mask = inputs.input_ids, inputs.attention_mask
         position_ids = attention_mask.cumsum(dim=-1)
         llm_inputs = DataProto()
         llm_inputs.batch = TensorDict(
-                {
-                    "input_ids": input_ids,
-                    "attention_mask": attention_mask,
-                    "position_ids": position_ids,
-                },
-                batch_size=input_ids.shape[0])
-        scores = [[i['reward'] for i in self.rollout_cache['history']]]
+            {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+            },
+            batch_size=input_ids.shape[0],
+        )
+        scores = [[i["reward"] for i in self.rollout_cache["history"]]]
         episode_scores = [sum(i) for i in scores]
-        penalty = self.rollout_cache['penalty']
+        penalty = self.rollout_cache["penalty"]
 
-        non_prompt_mask, score_tensor, response_mask = get_masks_and_scores(input_ids, self.tokenizer, scores,
-                                                                            use_turn_scores=self.pipeline_config.use_turn_scores)
+        non_prompt_mask, score_tensor, response_mask = get_masks_and_scores(
+            input_ids, self.tokenizer, scores, use_turn_scores=self.pipeline_config.use_turn_scores
+        )
         non_prompt_mask = torch.logical_and(non_prompt_mask, attention_mask)
         response_mask = torch.logical_and(response_mask, attention_mask)
 
         response_length = response_mask.sum(dim=-1).float().mean().item()
-        input_ids = pad_to_length(input_ids, length=self.pipeline_config.sequence_length, pad_value=self.tokenizer.pad_token_id)
+        input_ids = pad_to_length(
+            input_ids, length=self.pipeline_config.sequence_length, pad_value=self.tokenizer.pad_token_id
+        )
         attention_mask = pad_to_length(attention_mask, length=self.pipeline_config.sequence_length, pad_value=0)
         position_ids = pad_to_length(position_ids, length=self.pipeline_config.sequence_length, pad_value=0)
         response_mask = pad_to_length(response_mask, length=self.pipeline_config.sequence_length, pad_value=0)
         non_prompt_mask = pad_to_length(non_prompt_mask, length=self.pipeline_config.sequence_length, pad_value=0)
         score_tensor = pad_to_length(score_tensor, length=self.pipeline_config.sequence_length, pad_value=0)
 
-        llm_inputs.batch.update({
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "position_ids": position_ids,
-            "penalty": torch.Tensor([penalty]),
-        })
-        llm_inputs.non_tensor_batch.update({
-            "env_ids": np.array([self.rollout_cache["env_id"]], dtype=object),
-            "group_ids": np.array([self.rollout_cache["group_id"]], dtype=object),
-            "messages_list": np.array(messages_list, dtype=object),
-            "tags": np.array([self.rollout_cache["tag"]], dtype=object),
-            "frames": np.array([self.rollout_cache["frames"]], dtype=object),
-        })
+        llm_inputs.batch.update(
+            {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+                "penalty": torch.Tensor([penalty]),
+            }
+        )
+        llm_inputs.non_tensor_batch.update(
+            {
+                "env_ids": np.array([self.rollout_cache["env_id"]], dtype=object),
+                "group_ids": np.array([self.rollout_cache["group_id"]], dtype=object),
+                "messages_list": np.array(messages_list, dtype=object),
+                "tags": np.array([self.rollout_cache["tag"]], dtype=object),
+                "frames": np.array([self.rollout_cache["frames"]], dtype=object),
+            }
+        )
         # pad to response length
         llm_inputs.batch["llm_response_mask"] = response_mask
         llm_inputs.batch["non_prompt_mask"] = non_prompt_mask
@@ -398,23 +478,26 @@ class EnvManager:
         llm_inputs.batch["prompt_mask"] = prompt_mask
         llm_inputs.batch["scores"] = score_tensor
         # for llm raw response
-        llm_raw_text_list, _ = self._format_messages(env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=True)
+        llm_raw_text_list, _ = self._format_messages(
+            env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=True
+        )
         # print("llm_raw_text_list: ", llm_raw_text_list)
-        llm_inputs.non_tensor_batch['turn_scores'] = np.array(scores, dtype=object)
-        llm_inputs.non_tensor_batch['episode_scores'] = np.array(episode_scores, dtype=object)
-        llm_inputs.non_tensor_batch['llm_raw_text_list'] = np.array(llm_raw_text_list, dtype=object)
+        llm_inputs.non_tensor_batch["turn_scores"] = np.array(scores, dtype=object)
+        llm_inputs.non_tensor_batch["episode_scores"] = np.array(episode_scores, dtype=object)
+        llm_inputs.non_tensor_batch["llm_raw_text_list"] = np.array(llm_raw_text_list, dtype=object)
 
         entry = self.env_entry
-        status = entry['status']
+        status = entry["status"]
         env_metric = {
-            'success': float(status.terminated and (not status.truncated)),
-            'num_actions': status.num_actions,
+            "success": float(status.terminated and (not status.truncated)),
+            "num_actions": status.num_actions,
         }
         custom_metric = {}
 
-        for turn in self.rollout_cache['history']:
-            for k, v in turn.get('info', {}).items():
-                if k == 'success':
+        for turn in self.rollout_cache["history"]:
+            for k, v in turn.get("info", {}).items():
+                if k == "success":
+                    env_metric[k] = float(v)
                     continue
                 if k not in custom_metric:
                     custom_metric[k] = []
@@ -424,27 +507,27 @@ class EnvManager:
             # env_metric[k] = np.sum(v) / len(self.rollout_cache['history'])
             env_metric[k] = np.sum(v)
 
-        self.rollout_cache['history'][-1]['metrics'] = custom_metric
+        self.rollout_cache["history"][-1]["metrics"] = custom_metric
         env_metric = {f"env/{entry['tag']}/{k}": v for k, v in env_metric.items()}
         env_metric["env/response_length"] = response_length
-        self.rollout_cache['metrics'] = env_metric
+        self.rollout_cache["metrics"] = env_metric
         llm_inputs.meta_info = {"metrics": env_metric}
         return llm_inputs
 
-
     def _handle_mm_state(self, state: Union[str, np.ndarray, list[np.ndarray]]):
-        """Handle the state from the environment
-        """
+        """Handle the state from the environment"""
         if isinstance(state, str):  # text state
             return state
-        elif isinstance(state,
-                        np.ndarray):  # when env state is a single image, convert it to a list to unify output format
+        elif isinstance(
+            state, np.ndarray
+        ):  # when env state is a single image, convert it to a list to unify output format
             state = [state]
-        results = [PIL.Image.fromarray(_state, mode='RGB') for _state in state]
+        results = [PIL.Image.fromarray(_state, mode="RGB") for _state in state]
         return results
 
-    def _update_cache_history(self, history: List[Dict], next_state, legal_actions, actions_left,
-                              num_actions_info: Optional[Dict] = None):
+    def _update_cache_history(
+        self, history: List[Dict], next_state, legal_actions, actions_left, num_actions_info: Optional[Dict] = None
+    ):
         """
         Update last step info and append state to history
         """
@@ -453,24 +536,24 @@ class EnvManager:
             history[-1].update(num_actions_info)
 
         entry = {}  # append state to history
-        entry['state'] = next_state
-        entry['actions_left'] = actions_left
-        entry['legal_actions'] = legal_actions
+        entry["state"] = next_state
+        entry["actions_left"] = actions_left
+        entry["legal_actions"] = legal_actions
         history.append(entry)
         return history
 
     def _extract_map_valid_actions(self, entry: Dict, actions: List[str]):
         """extract valid actions from the action lookup table (if exists)"""
         mapped_actions = []
-        action_lookup = getattr(entry['env'].config, 'action_lookup', None)
+        action_lookup = getattr(entry["env"].config, "action_lookup", None)
         if action_lookup is None:
             mapped_actions = actions
         else:  # the envs have pre-defined action lookup
             rev_action_lookup = {v.lower(): k for k, v in action_lookup.items()}
             actions = [action.lower() for action in actions]
             mapped_actions = [rev_action_lookup[action] for action in actions if action in rev_action_lookup]
-        
-        legal_actions = entry['env'].get_all_actions()
+
+        legal_actions = entry["env"].get_all_actions()
         mapped_actions = [action for action in mapped_actions if action in legal_actions.values()]
         illegal_actions = [action for action in actions if action not in legal_actions.values()]
         lose_for_wrong_format = False
@@ -492,28 +575,60 @@ class EnvManager:
                 break
         return acc_reward, turn_info, turn_done, executed_actions
 
-    def _log_env_state(self, status, history, cur_obs, legal_actions, max_actions_per_traj, executed_actions, all_actions, acc_reward,
-                       turn_done, turn_info, env_input) -> Tuple[EnvStatus, List[Dict]]:
+    def _log_env_state(
+        self,
+        status,
+        history,
+        cur_obs,
+        legal_actions,
+        max_actions_per_traj,
+        executed_actions,
+        all_actions,
+        acc_reward,
+        turn_done,
+        turn_info,
+        env_input,
+    ) -> Tuple[EnvStatus, List[Dict]]:
         obs = self._handle_mm_state(cur_obs)
         status.num_actions += len(executed_actions)
         status.rewards.append(acc_reward)
         actions_left = max_actions_per_traj - status.num_actions
         if turn_done:
             status.terminated = True
-            status.truncated = not turn_info.get('success', False)
-        history = self._update_cache_history(history, next_state=obs, legal_actions=legal_actions, actions_left=actions_left, num_actions_info={
-            'actions': executed_actions, 'reward': acc_reward, 'info': turn_info,
-            'llm_response': env_input['llm_response'], 'llm_raw_response': env_input['llm_raw_response']
-        })
+            status.truncated = not turn_info.get("success", False)
+        history = self._update_cache_history(
+            history,
+            next_state=obs,
+            legal_actions=legal_actions,
+            actions_left=actions_left,
+            num_actions_info={
+                "actions": executed_actions,
+                "reward": acc_reward,
+                "info": turn_info,
+                "llm_response": env_input["llm_response"],
+                "llm_raw_response": env_input["llm_raw_response"],
+            },
+        )
         return status, history
 
     def _format_messages(self, env_output: Dict, prepare_for_update: bool, use_raw_llm_response: bool):
-        if 'state' in env_output['history'][-1] and (not use_raw_llm_response and prepare_for_update):
+        if "state" in env_output["history"][-1] and (not use_raw_llm_response and prepare_for_update):
             # when prepare for update, we do not add the state from the n+1 turn to the trajectory
-            env_output['history'] = env_output['history'][:-1]
+            env_output["history"] = env_output["history"][:-1]
+
         messages = [
-            {"role": "system", "content": self.env_entry['env'].get_prompt(mode="prefix", think=self.pipeline_config.enable_think)['system']},
-            {"role": "user", "content": self.env_entry['env'].get_prompt(mode="prefix", think=self.pipeline_config.enable_think)['user']}
+            {
+                "role": "system",
+                "content": self.env_entry["env"].get_prompt(mode="prefix", think=self.pipeline_config.enable_think)[
+                    "system"
+                ],
+            },
+            {
+                "role": "user",
+                "content": self.env_entry["env"].get_prompt(mode="prefix", think=self.pipeline_config.enable_think)[
+                    "user"
+                ],
+            },
         ]
 
         for idx, content in enumerate(env_output["history"]):
@@ -526,13 +641,17 @@ class EnvManager:
                 )
             if "llm_raw_response" in content:
                 #       改成actions合理吗？
-                messages.append({"role": "assistant",
-                                 "content": content["llm_response"] if not use_raw_llm_response else content["llm_raw_response"]})
-            if "reward" in content and not (prepare_for_update and idx == len(env_output["history"]) - 1):
-                # when prepare for update, we do not add the reward from the n+1 turn to the trajectory
-                # reward_content = f"Reward:\n{content['reward']}\n"
-                reward_content = ''
-                messages.append({"role": "user", "content": reward_content})
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content["llm_response"] if not use_raw_llm_response else content["llm_raw_response"],
+                    }
+                )
+            # if "reward" in content and not (prepare_for_update and idx == len(env_output["history"]) - 1):
+            #     # when prepare for update, we do not add the reward from the n+1 turn to the trajectory
+            #     # reward_content = f"Reward:\n{content['reward']}\n"
+            #     reward_content = ""
+            #     messages.append({"role": "user", "content": reward_content})
 
         # NOTE: this assertion is important for loss mask computation
         assert all(msg["role"] == "assistant" for msg in messages[2::2])
@@ -541,27 +660,23 @@ class EnvManager:
             # processor.chat_template might be different with tokenizer
             # can also set tokenizer.chat_template to processor.chat_template
             text = self.processor.apply_chat_template(
-                messages,
-                add_generation_prompt=(not prepare_for_update),
-                tokenize=False)
+                messages, add_generation_prompt=(not prepare_for_update), tokenize=False
+            )
         else:
             text = self.tokenizer.apply_chat_template(
-                messages,
-                add_generation_prompt=(not prepare_for_update),
-                tokenize=False)
+                messages, add_generation_prompt=(not prepare_for_update), tokenize=False
+            )
         if use_raw_llm_response:
             prompt_messages = messages[:2]
             if self.processor:
                 prompt_text = self.processor.apply_chat_template(
-                    prompt_messages,
-                    add_generation_prompt=False,
-                    tokenize=False)
+                    prompt_messages, add_generation_prompt=False, tokenize=False
+                )
             else:
                 prompt_text = self.tokenizer.apply_chat_template(
-                    prompt_messages,
-                    add_generation_prompt=False,
-                    tokenize=False)
-            text = text[len(prompt_text):]
+                    prompt_messages, add_generation_prompt=False, tokenize=False
+                )
+            text = text[len(prompt_text) :]
         if not prepare_for_update:
             if self.pipeline_config.enable_think:
                 text += "<think>"  # force the LLM to think before answering
@@ -573,7 +688,6 @@ class EnvManager:
         text = text.replace("<|im_end|>\n", "<|im_end|>")
         return [text], [messages]
 
-
     def _parse_response(self, response: str) -> List:
         pattern = (
             r"^<think>(.*?)</think>\s*<answer>(.*?)</answer>$"
@@ -582,7 +696,7 @@ class EnvManager:
         )
         match = re.search(pattern, response, re.DOTALL)
         if not match:
-            think_content, action_content, actions = "INVALID", "INVALID", [] # 如何更好的处理invalid response?
+            think_content, action_content, actions = "INVALID", "INVALID", []  # 如何更好的处理invalid response?
             # yali: this may be cause potential crash
             # llm_response, actions = response, []
         else:
@@ -595,14 +709,20 @@ class EnvManager:
                 action_content = action_content.replace(special_token, "").strip()
                 think_content = think_content.replace(special_token, "").strip()
 
-            actions = [action.strip() for action in action_content.split(self.pipeline_config.action_sep) if action.strip()]
+            actions = [
+                action.strip() for action in action_content.split(self.pipeline_config.action_sep) if action.strip()
+            ]
             max_actions = 1
 
             if len(actions) > max_actions:
                 actions = actions[:max_actions]  # Only the first MAX_ACTIONS actions are kept in the rollout.
                 action_content = (" " + self.pipeline_config.action_sep + " ").join(actions)
 
-        llm_response = f"<think>{think_content}</think><answer>{action_content}</answer>" if self.pipeline_config.enable_think else f"<answer>{action_content}</answer>"
+        llm_response = (
+            f"<think>{think_content}</think><answer>{action_content}</answer>"
+            if self.pipeline_config.enable_think
+            else f"<answer>{action_content}</answer>"
+        )
         return llm_response, actions
 
     def start_input_queue_process(self):
@@ -613,12 +733,16 @@ class EnvManager:
                 except Empty:
                     time.sleep(1)
                     continue
-                if command == 'stop':
+                if command == "stop":
                     self.logger.debug(f"{self.env_config['env_id']} stopped, episode_id: {self.episode_id}")
                     self.running = False
-                    ray.get(self.generate_scheduler.abort_request.remote(DataProto(meta_info={"request_id": self.request_id})))
+                    ray.get(
+                        self.generate_scheduler.abort_request.remote(
+                            DataProto(meta_info={"request_id": self.request_id})
+                        )
+                    )
                     self.request_id = None
                     break
 
-        self.process_input_queue_thread = Thread(target=process_input_queue, args=(self.input_queue, ))
+        self.process_input_queue_thread = Thread(target=process_input_queue, args=(self.input_queue,))
         self.process_input_queue_thread.start()

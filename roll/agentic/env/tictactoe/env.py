@@ -1,16 +1,15 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-import pyspiel
 import random
 from roll.agentic.env.tictactoe.config import TicTacToeConfig
 from roll.agentic.utils import all_seed
 from roll.agentic.env.base import BaseDiscreteActionEnv
 from textwrap import dedent
-from openai import OpenAI
 import json
 from typing import Optional, Dict, Any
 import re
+
 
 class TicTacToe(BaseDiscreteActionEnv):
     """Tic-Tac-Toe game environment using OpenSpiel."""
@@ -22,7 +21,9 @@ class TicTacToe(BaseDiscreteActionEnv):
         self.random_opponent = config.random_opponent
 
         BaseDiscreteActionEnv.__init__(self)
-        
+
+        import pyspiel
+
         self._env = pyspiel.load_game("tic_tac_toe")
         self.state = None
 
@@ -49,7 +50,7 @@ class TicTacToe(BaseDiscreteActionEnv):
         reward = 0
         if done:
             reward = self.state.returns()[0]
-        return observations, reward, done, info
+        return observations, reward * 10, done, info  # (tzy) use a greater reward scale
 
     def _step(self, action_str):
         action = self._string_to_action(action_str)
@@ -79,12 +80,12 @@ class TicTacToe(BaseDiscreteActionEnv):
     def _get_prefix_prompt(self, think=True):
         system_prompt = "You are an AI agent that makes optimal decisions to win in the game of tic-tac-toe."
         rules = (
-                "1. Tic-tac-toe is a two-player board game played on a three-by-three grid. "
-                "The grid is 0-indexed, where (0,0) is the top-left corner and (2,2) is the bottom-right corner.\n"
-                "2. Two players take turns placing their marks X and O in empty cells of the grid.\n"
-                "3. The player who first places three of their marks in a horizontal, vertical, or diagonal line wins.\n"
-                "4. If all cells are filled and no player wins, the game ends in a draw."
-                )
+            "1. Tic-tac-toe is a two-player board game played on a three-by-three grid. "
+            "The grid is 0-indexed, where (0,0) is the top-left corner and (2,2) is the bottom-right corner.\n"
+            "2. Two players take turns placing their marks X and O in empty cells of the grid.\n"
+            "3. The player who first places three of their marks in a horizontal, vertical, or diagonal line wins.\n"
+            "4. If all cells are filled and no player wins, the game ends in a draw."
+        )
         # mark = "X" if self.current_player == 0 else "O"
         mark = "X"
         opponent_mark = "O" if mark == "X" else "X"
@@ -103,7 +104,7 @@ class TicTacToe(BaseDiscreteActionEnv):
         FORMAT_PROMPT = "<answer>{your chosen action}</answer>"
         FORMAT_PROMPT_EXAMPLE = f"<answer><X(0,0)></answer>"
         instructions = (
-            f"Always choose only one action from the legal actions and output {FORMAT_PROMPT} with no extra text. "
+            f"Always choose only one action from the legal actions and output `{FORMAT_PROMPT}` with no extra text. "
             f"For example, `{FORMAT_PROMPT_EXAMPLE}`. "
             "Strictly follow this format. Responses that do not follow the format will result in immediate loss of the game.\n"
             "You don't have too much time to think. Think shortly. Do not overthink."
@@ -113,10 +114,7 @@ class TicTacToe(BaseDiscreteActionEnv):
             f"PLAYER INFORMATION:\n{information}\n\n"
             f"RESPONSE INSTRUCTIONS:\n{instructions}\n\n"
         )
-        prefix_prompt = {
-            "system": system_prompt,
-            "user": user_prompt
-        }
+        prefix_prompt = {"system": system_prompt, "user": user_prompt}
         return prefix_prompt
 
     def _get_state_prompt(self):
@@ -166,19 +164,15 @@ class TicTacToe(BaseDiscreteActionEnv):
             "player_0_return": returns[0],
             "player_1_return": returns[1],
             "winner": winner,
-            "lose_for_wrong_format": 0
+            "lose_for_wrong_format": 0,
+            "success": winner == 0,
         }
 
     def get_losing_state(self):
         observation = self.render()
         reward = -1
         done = True
-        info = {
-            "player_0_return": -1,
-            "player_1_return": 1,
-            "winner": 1,
-            "lose_for_wrong_format": 1
-        }
+        info = {"player_0_return": -1, "player_1_return": 1, "winner": 1, "lose_for_wrong_format": 1}
         return observation, reward, done, info
 
     def render(self, mode=None):
@@ -200,16 +194,16 @@ class TicTacToe(BaseDiscreteActionEnv):
             row = []
             for j in range(3):
                 piece = board[i][j]
-                if piece == '.':
-                    row.append('_')
-                elif piece == 'x':
-                    row.append('X')
-                elif piece == 'o':
-                    row.append('O')
+                if piece == ".":
+                    row.append("_")
+                elif piece == "x":
+                    row.append("X")
+                elif piece == "o":
+                    row.append("O")
                 else:
                     row.append(piece)
-            text_repr.append(''.join(row))
-        return '\n'.join(text_repr)
+            text_repr.append("".join(row))
+        return "\n".join(text_repr)
 
     def _render_rgb_array(self):
         fig, ax = plt.subplots(figsize=(4, 4))
@@ -217,44 +211,45 @@ class TicTacToe(BaseDiscreteActionEnv):
         ax.set_ylim(-0.5, 2.5)
         ax.invert_yaxis()
         for x in range(1, 3):
-            ax.plot([x - 0.5, x - 0.5], [-0.5, 2.5], color='black', linewidth=2)
+            ax.plot([x - 0.5, x - 0.5], [-0.5, 2.5], color="black", linewidth=2)
         for y in range(1, 3):
-            ax.plot([-0.5, 2.5], [y - 0.5, y - 0.5], color='black', linewidth=2)
+            ax.plot([-0.5, 2.5], [y - 0.5, y - 0.5], color="black", linewidth=2)
         ax.set_xticks([0, 1, 2])
         ax.set_yticks([0, 1, 2])
-        ax.set_xticklabels(['0', '1', '2'])
-        ax.set_yticklabels(['0', '1', '2'])
+        ax.set_xticklabels(["0", "1", "2"])
+        ax.set_yticklabels(["0", "1", "2"])
         if self.state is not None:
             board = np.array([list(line) for line in str(self.state).strip().split("\n")])
             for i in range(3):
                 for j in range(3):
                     piece = board[i][j]
-                    if piece != '.':
-                        color = 'red' if piece == 'x' else 'blue'
-                        ax.text(j, i, piece.upper(), fontsize=30, ha='center', va='center', color=color)
-        ax.set_aspect('equal')
+                    if piece != ".":
+                        color = "red" if piece == "x" else "blue"
+                        ax.text(j, i, piece.upper(), fontsize=30, ha="center", va="center", color=color)
+        ax.set_aspect("equal")
         return fig
 
     def close(self):
         """Close the environment."""
-        if hasattr(self, '_env') and self._env is not None:
+        if hasattr(self, "_env") and self._env is not None:
             self._env.close()
+
 
 if __name__ == "__main__":
     # Basic unit test
-    print("-"*100)
+    print("-" * 100)
     print("Basic unit test:")
-    print("-"*100)
+    print("-" * 100)
     env = TicTacToe()
     env.reset()
     done = False
     while not done:
-        print("-"*100)
-        prefix_prompt = env.get_prompt(mode='prefix')
+        print("-" * 100)
+        prefix_prompt = env.get_prompt(mode="prefix")
         print(f"System prompt: \n{prefix_prompt['system']}")
         print(f"User prompt: \n{prefix_prompt['user']}")
         print(f"State prompt: \n{env.get_prompt(mode='state')}")
-        print("-"*100)
+        print("-" * 100)
         action = random.choice(list(env.get_all_actions().values()))
         # action = "X(0,0)"
         print(f"Player {env.current_player} taking action: {action}")
@@ -263,13 +258,15 @@ if __name__ == "__main__":
         print(f"rewards: {rewards}")
         print(f"done: {done}")
         print(f"info: {info}")
-        print("-"*100)
+        print("-" * 100)
 
     # Test with a simple agent
-    print("-"*100)
+    print("-" * 100)
     print("Test with a simple agent:")
-    print("-"*100)
+    print("-" * 100)
     # Initialize OpenAI client
+    from openai import OpenAI
+
     client = OpenAI(
         base_url="http://localhost:8000/v1",
         api_key="EMPTY",
@@ -277,10 +274,7 @@ if __name__ == "__main__":
 
     # Call LLM to get action based on instruction
     def get_action_from_llm(prompt):
-        response = client.chat.completions.create(
-            model="/mnt/h_public/algm/models/Qwen3-4B",
-            messages=prompt
-        )
+        response = client.chat.completions.create(model="/mnt/h_public/algm/models/Qwen3-4B", messages=prompt)
         raw_content = response.choices[0].message.content
         if raw_content is None:
             raw_content = ""
@@ -299,13 +293,11 @@ if __name__ == "__main__":
     env = TicTacToe()
     num_steps = 5  # Number of steps to simulate
     from tqdm import tqdm
+
     env.reset()
     for step in tqdm(range(num_steps)):
         prompt = env.get_prompt(mode="prefix")
-        prompt = [
-            {"role": "system", "content": prompt['system']},
-            {"role": "user", "content": prompt['user']}
-        ]
+        prompt = [{"role": "system", "content": prompt["system"]}, {"role": "user", "content": prompt["user"]}]
         print(f"========== Step {step + 1} ==========")
         print(f"System prompt: \n{prompt[0]['content']}")
         print(f"User prompt: \n{prompt[1]['content']}\n")

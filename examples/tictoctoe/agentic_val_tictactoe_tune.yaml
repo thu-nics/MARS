@@ -15,10 +15,9 @@ seed: 42
 logging_dir: /mnt/public/algm/tanzheyue/rl/rl_examples/exps/${exp_name}/output/logs
 output_dir: /mnt/public/algm/tanzheyue/rl/rl_examples/exps/${exp_name}/output
 
-
 # render_save_dir: ./runs/render
 system_envs:
-  USE_MODELSCOPE: '1'
+  USE_MODELSCOPE: "1"
 
 #track_with: wandb
 #tracker_kwargs:
@@ -37,25 +36,26 @@ tracker_kwargs:
 
 num_gpus_per_node: 8
 
-max_steps: 200
-save_steps: 10000
+max_steps: 100
+save_steps: 100
 logging_steps: 1
-eval_steps: 10
+eval_steps: 5
 resume_from_checkpoint: false
 
 rollout_batch_size: 128
 val_batch_size: 1024
-sequence_length: 16384
+sequence_length: 12288
 
-reward_clip: 20
-advantage_clip: 10.0
+reward_clip: 10
+advantage_clip: 4
+dual_clip_loss: true
 ppo_epochs: 1
 adv_estimator: "reinforce"
 #pg_clip: 0.1
 #dual_clip_loss: True
-init_kl_coef: 0.1
+init_kl_coef: 0.0
 whiten_advantages: true
-entropy_loss_coef: 0.05
+entropy_loss_coef: 0.01
 
 pretrain: /mnt/public/algm/models/Qwen3-4B/
 
@@ -67,18 +67,19 @@ actor_train:
     model_type: ~
   training_args:
     lr_scheduler_type: cosine_with_min_lr
-    learning_rate: 5e-7
-    weight_decay: 0.1
+    learning_rate: 1e-6
+    weight_decay: 0.05
     adam_beta1: 0.9
     adam_beta2: 0.95
     per_device_train_batch_size: 2
-    gradient_accumulation_steps: 4
-    warmup_steps: 5
+    gradient_accumulation_steps: 2
+    warmup_steps: 10
   data_args:
     template: qwen3
   strategy_args:
     strategy_name: megatron_train
     strategy_config:
+      sequence_parallel: true
       tensor_model_parallel_size: 2
       pipeline_model_parallel_size: 1
       expert_model_parallel_size: 1
@@ -93,11 +94,11 @@ actor_infer:
     disable_gradient_checkpointing: true
     dtype: bf16
   generating_args:
-    max_new_tokens: 8192 # single-turn response length
+    max_new_tokens: 4096 # single-turn response length
     top_p: 0.99
     top_k: 100
     num_beams: 1
-    temperature: 0.3
+    temperature: 0.9
     num_return_sequences: 1
   data_args:
     template: qwen3
@@ -135,7 +136,7 @@ reward_normalization:
 custom_envs:
   TicTacToe:
     env_type: tictactoe
-    max_actions_per_traj:  ${max_actions_per_traj}
+    max_actions_per_traj: ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
     max_tokens: 100
     grid_vocab: false
