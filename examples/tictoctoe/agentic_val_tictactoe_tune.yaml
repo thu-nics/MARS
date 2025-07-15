@@ -51,9 +51,10 @@ advantage_clip: 4
 dual_clip_loss: true
 ppo_epochs: 1
 adv_estimator: "reinforce"
-#pg_clip: 0.1
+# pg_clip: 0.1
 #dual_clip_loss: True
 init_kl_coef: 0.0
+
 whiten_advantages: true
 entropy_loss_coef: 0.01
 
@@ -85,6 +86,8 @@ actor_train:
       expert_model_parallel_size: 1
       use_distributed_optimizer: true
       recompute_granularity: full
+      accumulate_allreduce_grads_in_fp32: true
+      check_for_nan_in_loss_and_grad: false
   device_mapping: list(range(0,8))
   infer_batch_size: 2
 
@@ -98,7 +101,7 @@ actor_infer:
     top_p: 0.99
     top_k: 100
     num_beams: 1
-    temperature: 0.9
+    temperature: 0.5
     num_return_sequences: 1
   data_args:
     template: qwen3
@@ -132,6 +135,7 @@ max_actions_per_traj: 5
 reward_normalization:
   grouping: tags # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
   method: identity # asym_clip / identity / mean_std
+whiten_rewards: true
 
 custom_envs:
   TicTacToe:

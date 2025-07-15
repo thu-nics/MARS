@@ -209,7 +209,7 @@ class EnvManager:
         reward = min(0, reward)  # we also don't want to reward shorter responses.
 
         if reward < 0:
-            reward *= 10  # scale to make it comparable with the winning rewards
+            reward *= 0.5  # scale to make it comparable with the winning rewards
 
         return reward
 

@@ -50,7 +50,7 @@ class TicTacToe(BaseDiscreteActionEnv):
         reward = 0
         if done:
             reward = self.state.returns()[0]
-        return observations, reward * 10, done, info  # (tzy) use a greater reward scale
+        return observations, reward, done, info  # (tzy) use a greater reward scale
 
     def _step(self, action_str):
         action = self._string_to_action(action_str)
@@ -172,7 +172,13 @@ class TicTacToe(BaseDiscreteActionEnv):
         observation = self.render()
         reward = -1
         done = True
-        info = {"player_0_return": -1, "player_1_return": 1, "winner": 1, "lose_for_wrong_format": 1}
+        info = {
+            "player_0_return": -1,
+            "player_1_return": 1,
+            "winner": 1,
+            "lose_for_wrong_format": 1,
+            "success": 0,
+        }
         return observation, reward, done, info
 
     def render(self, mode=None):
