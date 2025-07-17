@@ -238,6 +238,12 @@ class AgenticPipeline(BasePipeline):
                         whiten_advantages=self.pipeline_config.whiten_advantages,
                         whiten_rewards=self.pipeline_config.whiten_rewards,
                     )
+                    # print(batch)
+                    # with open("x.pkl", "wb") as f:
+                    #     import pickle
+
+                    #     pickle.dump(batch, f)
+                    #     raise ValueError("Debugging batch data, please check x.pkl")
 
                 metrics.update(kl_metrics)
                 metrics["time/adv"] = timer.last

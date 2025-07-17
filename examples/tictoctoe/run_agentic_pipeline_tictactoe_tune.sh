@@ -6,7 +6,7 @@ CONFIG_PATH=$(basename $(dirname $0))
 ROLL_PATH=${PWD}
 export PYTHONPATH="$ROLL_PATH:$PYTHONPATH"
 
-ROLL_OUTPUT_DIR="./runs/tictactoe/$(date +%Y%m%d-%H%M%S)"
+ROLL_OUTPUT_DIR="./runs/tictactoe_new/$(date +%Y%m%d-%H%M%S)"
 ROLL_LOG_DIR=$ROLL_OUTPUT_DIR/logs
 ROLL_RENDER_DIR=$ROLL_OUTPUT_DIR/render
 export ROLL_OUTPUT_DIR=$ROLL_OUTPUT_DIR

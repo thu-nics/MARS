@@ -165,6 +165,12 @@ class EnvManager:
         ).remote()
         self.request_id: Optional[str] = None
 
+        # Template modification to render thinking state in previous rounds...
+        if self.tokenizer:
+            self.tokenizer.chat_template = self.tokenizer.chat_template.replace("> ns.last_query_index", "> 0")
+        if self.processor:
+            self.processor.chat_template = self.processor.chat_template.replace("> ns.last_query_index", "> 0")
+
     def reset(self):
         entry = self.env_entry
         self.rollout_cache = {
@@ -365,6 +371,7 @@ class EnvManager:
             {
                 "env_ids": np.array([env_output["env_id"]], dtype=object),
                 "group_ids": np.array([env_output["group_id"]], dtype=object),
+                "llm_input_texts": np.array(llm_input_texts, dtype=object),
                 "messages_list": np.array(messages_list, dtype=object),
                 "tags": np.array([env_output["tag"]], dtype=object),
             }
@@ -380,7 +387,7 @@ class EnvManager:
             token_lengths = list(map(lambda x: len(self.tokenizer.encode(x)) + 1, responses))  # + 1 for eos token
 
         responses = [
-            "<think>" + response if self.pipeline_config.enable_think else "<answer>" + response
+            "<think>\n" + response if self.pipeline_config.enable_think else "<answer>" + response
             for response in responses
         ]  # The LLM generation does not include <think> tags. Add them back here.
 
@@ -405,7 +412,7 @@ class EnvManager:
         2. 每个rollout 应该是一个List[Dict]
         3. 每个Dict 应该是一个step的信息
         """
-        print("rollout cache: ", self.rollout_cache)
+        # print("rollout cache: ", self.rollout_cache)
         llm_input_texts, messages_list = self._format_messages(
             env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=False
         )
@@ -479,7 +486,7 @@ class EnvManager:
         llm_inputs.batch["scores"] = score_tensor
         # for llm raw response
         llm_raw_text_list, _ = self._format_messages(
-            env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=True
+            env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=False
         )
         # print("llm_raw_text_list: ", llm_raw_text_list)
         llm_inputs.non_tensor_batch["turn_scores"] = np.array(scores, dtype=object)
@@ -507,7 +514,9 @@ class EnvManager:
             # env_metric[k] = np.sum(v) / len(self.rollout_cache['history'])
             env_metric[k] = np.sum(v)
 
-        self.rollout_cache["history"][-1]["metrics"] = custom_metric
+        if self.rollout_cache["history"]:
+            self.rollout_cache["history"][-1]["metrics"] = custom_metric
+
         env_metric = {f"env/{entry['tag']}/{k}": v for k, v in env_metric.items()}
         env_metric["env/response_length"] = response_length
         self.rollout_cache["metrics"] = env_metric
@@ -559,6 +568,7 @@ class EnvManager:
         lose_for_wrong_format = False
         if len(mapped_actions) != 1 or len(illegal_actions) > 0:
             lose_for_wrong_format = True
+            # print(f"Invalid actions: {actions}, mapped actions: {mapped_actions}, legal actions: {legal_actions}")
         return mapped_actions, lose_for_wrong_format
 
     def _execute_actions(self, env, actions):
@@ -614,6 +624,7 @@ class EnvManager:
     def _format_messages(self, env_output: Dict, prepare_for_update: bool, use_raw_llm_response: bool):
         if "state" in env_output["history"][-1] and (not use_raw_llm_response and prepare_for_update):
             # when prepare for update, we do not add the state from the n+1 turn to the trajectory
+            # print(f"removing last state from history: {env_output['history'][-1]}")
             env_output["history"] = env_output["history"][:-1]
 
         messages = [
@@ -632,12 +643,18 @@ class EnvManager:
         ]
 
         for idx, content in enumerate(env_output["history"]):
-            turn_idx_content = f"\n\nYour {idx + 1} turn:\n\n"
+            if messages[-1]["role"] != "user":
+                # ensure the last message is user message.
+                messages.append({"role": "user", "content": ""})
+
+            turn_idx_content = f"Information of Turn-{idx * 2 + 1}:\n\n"
             messages[-1]["content"] += turn_idx_content
             if "state" in content:
                 messages[-1]["content"] += (
                     f"GAME STATE:\n{content['state']}\n\n"
                     f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}.\n\n"
+                    f"You are `X` and your opponent is `O`. Now this is your turn, please take an action from the legal actions above.\n"
+                    "Note that you should output your action in the format of `<answer><X({i},{j})></answer>` where `X` is your action and `(i,j)` is the coordinate of the action.\n\n"
                 )
             if "llm_raw_response" in content:
                 #       改成actions合理吗？
@@ -645,13 +662,14 @@ class EnvManager:
                     {
                         "role": "assistant",
                         "content": content["llm_response"] if not use_raw_llm_response else content["llm_raw_response"],
+                        # "content": content["llm_raw_response"],
                     }
                 )
-            # if "reward" in content and not (prepare_for_update and idx == len(env_output["history"]) - 1):
-            #     # when prepare for update, we do not add the reward from the n+1 turn to the trajectory
-            #     # reward_content = f"Reward:\n{content['reward']}\n"
-            #     reward_content = ""
-            #     messages.append({"role": "user", "content": reward_content})
+            if "reward" in content and not (prepare_for_update and idx == len(env_output["history"]) - 1):
+                # when prepare for update, we do not add the reward from the n+1 turn to the trajectory
+                # reward_content = f"Reward:\n{content['reward']}\n"
+                reward_content = ""
+                messages.append({"role": "user", "content": reward_content})
 
         # NOTE: this assertion is important for loss mask computation
         assert all(msg["role"] == "assistant" for msg in messages[2::2])
@@ -679,7 +697,7 @@ class EnvManager:
             text = text[len(prompt_text) :]
         if not prepare_for_update:
             if self.pipeline_config.enable_think:
-                text += "<think>"  # force the LLM to think before answering
+                text += "<think>\n"  # force the LLM to think before answering
             else:
                 text += "<answer>"  # force the LLM to answer
 
@@ -697,6 +715,7 @@ class EnvManager:
         match = re.search(pattern, response, re.DOTALL)
         if not match:
             think_content, action_content, actions = "INVALID", "INVALID", []  # 如何更好的处理invalid response?
+            # print(f"Invalid response format: {response}")
             # yali: this may be cause potential crash
             # llm_response, actions = response, []
         else:
@@ -719,7 +738,7 @@ class EnvManager:
                 action_content = (" " + self.pipeline_config.action_sep + " ").join(actions)
 
         llm_response = (
-            f"<think>{think_content}</think><answer>{action_content}</answer>"
+            f"<think>\n{think_content}\n</think><answer>{action_content}</answer>"
             if self.pipeline_config.enable_think
             else f"<answer>{action_content}</answer>"
         )
