@@ -208,14 +208,14 @@ class EnvManager:
 
         # for response in format: `<answer>X({i},{j})</answer><|im_end|>`(0<=i,j<3), the minimum length is 11.
         min_len = 11
-        max_len = 2000
+        max_len = 4096
         reward = 0.0
         # penalize the length of the response
         reward = 1 - (token_length - min_len) / (max_len - min_len)
         reward = min(0, reward)  # we also don't want to reward shorter responses.
 
         if reward < 0:
-            reward *= 0.5  # scale to make it comparable with the winning rewards
+            reward *= 0.3  # scale to make it comparable with the winning rewards
 
         return reward
 
@@ -234,7 +234,7 @@ class EnvManager:
             acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(
                 entry["env"], valid_actions[:actions_left_before]
             )
-            acc_reward -= self.worker_config.format_penalty
+            # acc_reward -= self.worker_config.format_penalty
 
         acc_reward += self.compute_length_penalty(env_input["token_length"])
 
@@ -486,7 +486,7 @@ class EnvManager:
         llm_inputs.batch["scores"] = score_tensor
         # for llm raw response
         llm_raw_text_list, _ = self._format_messages(
-            env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=False
+            env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=True
         )
         # print("llm_raw_text_list: ", llm_raw_text_list)
         llm_inputs.non_tensor_batch["turn_scores"] = np.array(scores, dtype=object)
@@ -514,8 +514,8 @@ class EnvManager:
             # env_metric[k] = np.sum(v) / len(self.rollout_cache['history'])
             env_metric[k] = np.sum(v)
 
-        if self.rollout_cache["history"]:
-            self.rollout_cache["history"][-1]["metrics"] = custom_metric
+        # if len(self.rollout_cache["history"]) > 0:
+        self.rollout_cache["history"][-1]["metrics"] = custom_metric
 
         env_metric = {f"env/{entry['tag']}/{k}": v for k, v in env_metric.items()}
         env_metric["env/response_length"] = response_length
@@ -661,8 +661,8 @@ class EnvManager:
                 messages.append(
                     {
                         "role": "assistant",
-                        "content": content["llm_response"] if not use_raw_llm_response else content["llm_raw_response"],
-                        # "content": content["llm_raw_response"],
+                        # "content": content["llm_response"] if not use_raw_llm_response else content["llm_raw_response"],
+                        "content": content["llm_raw_response"],
                     }
                 )
             if "reward" in content and not (prepare_for_update and idx == len(env_output["history"]) - 1):

@@ -44,7 +44,7 @@ resume_from_checkpoint: false
 
 rollout_batch_size: 128
 val_batch_size: 1024
-sequence_length: 12288
+sequence_length: 16384
 
 reward_clip: 10
 advantage_clip: 4
@@ -97,7 +97,7 @@ actor_infer:
     disable_gradient_checkpointing: true
     dtype: bf16
   generating_args:
-    max_new_tokens: 4096 # single-turn response length
+    max_new_tokens: 8192 # single-turn response length
     top_p: 0.99
     top_k: 100
     num_beams: 1

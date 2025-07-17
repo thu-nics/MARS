@@ -239,11 +239,20 @@ class AgenticPipeline(BasePipeline):
                         whiten_rewards=self.pipeline_config.whiten_rewards,
                     )
                     # print(batch)
-                    # with open("x.pkl", "wb") as f:
-                    #     import pickle
 
-                    #     pickle.dump(batch, f)
-                    #     raise ValueError("Debugging batch data, please check x.pkl")
+                    # (DEBUG) Dump data to log dir
+                    output_dir = os.environ["ROLL_OUTPUT_DIR"]
+                    output_path = os.path.join(output_dir, "debug", f"batch-{global_step}.pkl")
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+                    with open(output_path, "wb") as f:
+                        import pickle
+                        import time
+
+                        start = time.time()
+                        logger.info(f"Dumping batch to {output_path} at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+                        pickle.dump(batch, f)
+                    logger.info(f"Batch dumped to {output_path}, took {time.time() - start:.2f} seconds")
 
                 metrics.update(kl_metrics)
                 metrics["time/adv"] = timer.last
