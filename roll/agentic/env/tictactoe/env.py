@@ -18,14 +18,26 @@ class TicTacToe(BaseDiscreteActionEnv):
         # Using mappings directly from config
         self.config = config
         self.render_mode = config.render_mode
-        self.random_opponent = config.random_opponent
+        self.built_in_opponent = config.built_in_opponent
 
         BaseDiscreteActionEnv.__init__(self)
 
         import pyspiel
-
         self._env = pyspiel.load_game("tic_tac_toe")
         self.state = None
+
+        if self.built_in_opponent == "mcts":
+            from open_spiel.python.algorithms import mcts
+            random_state = np.random.RandomState(config.seed)
+            evaluator = mcts.RandomRolloutEvaluator(config.rollout_count, random_state)
+            self.mcts_bot = mcts.MCTSBot(
+                self._env,
+                config.uct_c,
+                config.max_simulations,
+                evaluator,
+                solve=False,
+                random_state=random_state,
+            )
 
     @property
     def current_player(self):
@@ -45,15 +57,23 @@ class TicTacToe(BaseDiscreteActionEnv):
     def step(self, action_str):
         observations, _, done, info = self._step(action_str)
         # If the opponent is random, we need to let the opponent take action
-        if self.current_player == 1 and self.random_opponent and not done:
-            observations, _, done, info = self._step(random.choice(list(self.get_all_actions().values())))
+        if self.current_player == 1 and not done:
+            if self.built_in_opponent == "random":
+                action = random.choice(list(self.get_all_actions().values()))
+            elif self.built_in_opponent == "mcts":
+                action = self.mcts_bot.step(self.state)
+            else:
+                raise ValueError(f"Invalid built-in opponent: {self.built_in_opponent}")
+            # print(f"Built-in opponent {self.built_in_opponent} taking action: {self._action_to_string(self.current_player, action)}")
+            observations, _, done, info = self._step(action)
         reward = 0
         if done:
             reward = self.state.returns()[0]
         return observations, reward, done, info  # (tzy) use a greater reward scale
 
-    def _step(self, action_str):
-        action = self._string_to_action(action_str)
+    def _step(self, action):
+        if isinstance(action, str):
+            action = self._string_to_action(action)
         if self.state is None or self.state.is_terminal():
             raise RuntimeError("Cannot apply action on a terminal state.")
 
@@ -266,56 +286,3 @@ if __name__ == "__main__":
         print(f"done: {done}")
         print(f"info: {info}")
         print("-" * 100)
-
-    # Test with a simple agent
-    print("-" * 100)
-    print("Test with a simple agent:")
-    print("-" * 100)
-    # Initialize OpenAI client
-    from openai import OpenAI
-
-    client = OpenAI(
-        base_url="http://localhost:8000/v1",
-        api_key="EMPTY",
-    )
-
-    # Call LLM to get action based on instruction
-    def get_action_from_llm(prompt):
-        response = client.chat.completions.create(model="/mnt/h_public/algm/models/Qwen3-4B", messages=prompt)
-        raw_content = response.choices[0].message.content
-        if raw_content is None:
-            raw_content = ""
-
-        json_pattern = r"```json\s*(.*?)\s*```"
-        match = re.search(json_pattern, raw_content, re.DOTALL)
-        action_content = match.group(1) if match else "INVALID"
-        try:
-            action_json = json.loads(action_content)
-            return action_json["action"], raw_content
-        except Exception as e:
-            print("Failed to parse LLM response:", raw_content)
-            print("Extracted content:", action_content)
-            raise e
-
-    env = TicTacToe()
-    num_steps = 5  # Number of steps to simulate
-    from tqdm import tqdm
-
-    env.reset()
-    for step in tqdm(range(num_steps)):
-        prompt = env.get_prompt(mode="prefix")
-        prompt = [{"role": "system", "content": prompt["system"]}, {"role": "user", "content": prompt["user"]}]
-        print(f"========== Step {step + 1} ==========")
-        print(f"System prompt: \n{prompt[0]['content']}")
-        print(f"User prompt: \n{prompt[1]['content']}\n")
-        action, raw_content = get_action_from_llm(prompt)
-        print(f"LLM Response: \n{raw_content}")
-        print(f"LLM Action: {action}")
-        observations, rewards, done, info = env.step(action)
-        print(f"observations: \n{observations}")
-        print(f"rewards: {rewards}")
-        print(f"done: {done}")
-        print(f"info: {info}")
-
-        if done:
-            break

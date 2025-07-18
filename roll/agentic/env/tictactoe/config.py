@@ -6,4 +6,7 @@ from typing import Tuple, Optional, Dict
 class TicTacToeConfig:
     seed: int = 42
     render_mode: str = "text"
-    random_opponent: bool = True
+    built_in_opponent: str = "mcts"
+    uct_c: float = 2.0                   
+    max_simulations: int = 100
+    rollout_count: int = 10

@@ -137,8 +137,8 @@ custom_envs:
     max_tokens: 100
     grid_vocab: false
     env_config:
-      random_opponent: true
-      render_mode: "text"
+      built_in_opponent: mcts
+      render_mode: text
 
 train_env_manager:
   format_penalty: -0.05 # sokoban env penalty_for_step=-0.1
