@@ -166,10 +166,22 @@ class EnvManager:
         self.request_id: Optional[str] = None
 
         # Template modification to render thinking state in previous rounds...
+
+        template = '{%- if tools %}\n    {{- \'<|im_start|>system\\n\' }}\n    {%- if messages[0][\'role\'] == \'system\' %}\n        {{- messages[0][\'content\'] }}\n    {%- else %}\n        {{- \'You are a helpful assistant.\' }}\n    {%- endif %}\n    {{- "\\n\\n# Tools\\n\\nYou may call one or more functions to assist with the user query.\\n\\nYou are provided with function signatures within <tools></tools> XML tags:\\n<tools>" }}\n    {%- for tool in tools %}\n        {{- "\\n" }}\n        {{- tool | tojson }}\n    {%- endfor %}\n    {{- "\\n</tools>\\n\\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\\n<tool_call>\\n{\\"name\\": <function-name>, \\"arguments\\": <args-json-object>}\\n</tool_call><|im_end|>\\n" }}\n{%- else %}\n    {%- if messages[0][\'role\'] == \'system\' %}\n        {{- \'<|im_start|>system\\n\' + messages[0][\'content\'] + \'<|im_end|>\\n\' }}\n    {%- else %}\n        {{- \'<|im_start|>system\\nYou are a helpful assistant.<|im_end|>\\n\' }}\n    {%- endif %}\n{%- endif %}\n{%- for message in messages %}\n    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) %}\n        {{- \'<|im_start|>\' + message.role + \'\\n\' + message.content + \'<|im_end|>\' + \'\\n\' }}\n    {%- elif message.role == "assistant" %}\n        {{- \'<|im_start|>\' + message.role }}\n        {%- if message.content %}\n            {{- \'\\n\' + message.content }}\n        {%- endif %}\n        {%- for tool_call in message.tool_calls %}\n            {%- if tool_call.function is defined %}\n                {%- set tool_call = tool_call.function %}\n            {%- endif %}\n            {{- \'\\n<tool_call>\\n{"name": "\' }}\n            {{- tool_call.name }}\n            {{- \'", "arguments": \' }}\n            {{- tool_call.arguments | tojson }}\n            {{- \'}\\n</tool_call>\' }}\n        {%- endfor %}\n        {{- \'<|im_end|>\\n\' }}\n    {%- elif message.role == "tool" %}\n        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") %}\n            {{- \'<|im_start|>user\' }}\n        {%- endif %}\n        {{- \'\\n<tool_response>\\n\' }}\n        {{- message.content }}\n        {{- \'\\n</tool_response>\' }}\n        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}\n            {{- \'<|im_end|>\\n\' }}\n        {%- endif %}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- \'<|im_start|>assistant\\n\' }}\n{%- endif %}\n'
         if self.tokenizer:
-            self.tokenizer.chat_template = self.tokenizer.chat_template.replace("> ns.last_query_index", "> 0")
+            self.tokenizer.chat_template = template
         if self.processor:
-            self.processor.chat_template = self.processor.chat_template.replace("> ns.last_query_index", "> 0")
+            self.processor.chat_template = template
+
+        self.length_reward_scale = {
+            "upper": 0.1,
+            "lower": 0.5,
+            "min_len": 11,
+            "max_len": 1024,
+            "coef": 1,
+        }
+
+        print(f"Length reward scale: {self.length_reward_scale}")  # For debugging
 
     def reset(self):
         entry = self.env_entry
@@ -207,15 +219,18 @@ class EnvManager:
         # reward = 0.5 - (token_length - min_len) / (max_len - min_len)
 
         # for response in format: `<answer>X({i},{j})</answer><|im_end|>`(0<=i,j<3), the minimum length is 11.
-        min_len = 11
-        max_len = 4096
+        min_len = self.length_reward_scale["min_len"]
+        max_len = self.length_reward_scale["max_len"]
         reward = 0.0
         # penalize the length of the response
-        reward = 1 - (token_length - min_len) / (max_len - min_len)
+        reward = self.length_reward_scale["coef"] - (token_length - min_len) / (max_len - min_len)
         reward = min(0, reward)  # we also don't want to reward shorter responses.
 
+        if reward > 0:
+            reward *= self.length_reward_scale["upper"]  # scale to make it comparable with the winning rewards
+
         if reward < 0:
-            reward *= 0.3  # scale to make it comparable with the winning rewards
+            reward *= self.length_reward_scale["lower"]  # scale to make it comparable with the winning rewards
 
         return reward
 
@@ -234,7 +249,7 @@ class EnvManager:
             acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(
                 entry["env"], valid_actions[:actions_left_before]
             )
-            # acc_reward -= self.worker_config.format_penalty
+            acc_reward -= self.worker_config.format_penalty
 
         acc_reward += self.compute_length_penalty(env_input["token_length"])
 
@@ -654,7 +669,7 @@ class EnvManager:
                     f"GAME STATE:\n{content['state']}\n\n"
                     f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}.\n\n"
                     f"You are `X` and your opponent is `O`. Now this is your turn, please take an action from the legal actions above.\n"
-                    "Note that you should output your action in the format of `<answer><X({i},{j})></answer>` where `X` is your action and `(i,j)` is the coordinate of the action.\n\n"
+                    "After completing your thinking process, output your action using the format `<answer><X({i},{j})></answer>`, where X is your action and (i,j) represents the coordinates--no extra text should be included.\n\n"
                 )
             if "llm_raw_response" in content:
                 #       改成actions合理吗？

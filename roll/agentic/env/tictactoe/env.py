@@ -126,9 +126,9 @@ class TicTacToe(BaseDiscreteActionEnv):
         instructions = (
             f"Always choose only one action from the legal actions and output `{FORMAT_PROMPT}` with no extra text. "
             f"For example, `{FORMAT_PROMPT_EXAMPLE}`. "
-            "Strictly follow this format. Responses that do not follow the format will result in immediate loss of the game.\n"
             "After you have chosen an action, I will provide the next game state and you will continue to play.\n"
-            "Note that you don't have too much time to think. Think shortly. Do not overthink.\n\n"
+            # "Strictly follow the above format. Responses that do not follow the format will result in immediate loss of the game.\n"
+            "Please output the answer with given format with no extra text after you finish the thinking process.\n\n"
         )
         user_prompt = (
             f"GAME RULES:\n{rules}\n\n"
