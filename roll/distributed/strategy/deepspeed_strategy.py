@@ -239,6 +239,9 @@ class DeepSpeedTrainStrategy(DeepSpeedInferStrategy, TrainStrategy):
                 self.worker_config.training_args.max_steps
             ),
             num_training_steps=self.worker_config.training_args.max_steps,
+            scheduler_specific_kwargs={
+                "min_lr": 0.0,
+            },
         )
 
         self.model, self.optimizer, _, self.scheduler = deepspeed.initialize(

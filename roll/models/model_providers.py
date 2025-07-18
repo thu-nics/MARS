@@ -409,7 +409,7 @@ def default_reward_model_provider(
         logger.info(f"init_kwargs: {init_kwargs}")
         if model_args.model_type in ["auto_sequence_classification"]:
             logger.info(f"use AutoModelForSequenceClassification model {model_args.model_type}")
-            attn_implementation = "flash_attention_2" if model_args.flash_attn == "fa2" else "eager"
+            attn_implementation = "flash_attention_2" if model_args.attn_implementation == "fa2" else "eager"
             config = AutoConfig.from_pretrained(model_args.model_name_or_path)
             config.num_labels = model_args.num_labels
             setattr(config, "attn_implementation", attn_implementation)
@@ -419,7 +419,7 @@ def default_reward_model_provider(
             )
         elif model_args.model_type in ["auto_token_classification"]:
             logger.info(f"use AutoModelForTokenClassification model {model_args.model_type}")
-            attn_implementation = "flash_attention_2" if model_args.flash_attn == "fa2" else "eager"
+            attn_implementation = "flash_attention_2" if model_args.attn_implementation == "fa2" else "eager"
             config = AutoConfig.from_pretrained(model_args.model_name_or_path)
             config.num_labels = model_args.num_labels
             setattr(config, "attn_implementation", attn_implementation)
@@ -485,7 +485,7 @@ def default_value_model_provider(
         logger.info(f"init_kwargs: {init_kwargs}")
         if model_args.model_type in ["auto_token_classification"]:
             logger.info(f"use AutoModelForTokenClassification model {model_args.model_type}")
-            attn_implementation = "flash_attention_2" if model_args.flash_attn == "fa2" else "eager"
+            attn_implementation = "flash_attention_2" if model_args.attn_implementation == "fa2" else "eager"
             config = AutoConfig.from_pretrained(model_args.model_name_or_path)
             config.num_labels = model_args.num_labels
             setattr(config, "attn_implementation", attn_implementation)

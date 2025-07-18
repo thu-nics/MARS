@@ -249,7 +249,7 @@ class EnvManager:
             acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(
                 entry["env"], valid_actions[:actions_left_before]
             )
-            acc_reward -= self.worker_config.format_penalty
+            acc_reward += self.worker_config.format_penalty
 
         acc_reward += self.compute_length_penalty(env_input["token_length"])
 

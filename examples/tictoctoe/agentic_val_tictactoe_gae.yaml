@@ -44,25 +44,28 @@ resume_from_checkpoint: false
 
 rollout_batch_size: 128
 val_batch_size: 1024
-sequence_length: 16384
+sequence_length: 12288
 
-reward_clip: 10
-advantage_clip: 4
+critic_warmup: 5
+reward_clip: 2
+advantage_clip: 2
+value_clip: 2
 dual_clip_loss: true
 ppo_epochs: 1
-adv_estimator: "reinforce"
+adv_estimator: "gae"
 # pg_clip: 0.1
-#dual_clip_loss: True
 init_kl_coef: 0.0
 
 whiten_advantages: true
 entropy_loss_coef: 0.01
+loss_agg_mode: "token-mean"
 
 pretrain: /mnt/public/algm/models/Qwen3-4B/
+reward_pretrain: /mnt/public/algm/models/Qwen3-4B/
 
 actor_train:
   model_args:
-    flash_attn: fa2
+    attn_implementation: fa2
     disable_gradient_checkpointing: false
     dtype: bf16
     model_type: ~
@@ -91,13 +94,38 @@ actor_train:
   device_mapping: list(range(0,8))
   infer_batch_size: 2
 
+critic:
+  model_args:
+    attn_implementation: fa2
+    disable_gradient_checkpointing: false
+    dtype: bf16
+    model_type: auto_token_classification
+    num_labels: 1
+  training_args:
+    lr_scheduler_type: cosine_with_min_lr
+    learning_rate: 1e-6
+    weight_decay: 0.05
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 2
+    warmup_steps: 10
+  data_args:
+    template: qwen3
+  strategy_args:
+    strategy_name: deepspeed_train
+    strategy_config:
+      ${deepspeed_zero3_cpuoffload}
+  device_mapping: list(range(0,8))
+  infer_batch_size: 2
+
 actor_infer:
   model_args:
-    flash_attn: fa2
+    attn_implementation: fa2
     disable_gradient_checkpointing: true
     dtype: bf16
   generating_args:
-    max_new_tokens: 2048 # single-turn response length
+    max_new_tokens: 4096 # single-turn response length
     top_p: 0.99
     top_k: 100
     num_beams: 1
@@ -115,7 +143,7 @@ actor_infer:
 
 reference:
   model_args:
-    flash_attn: fa2
+    attn_implementation: fa2
     disable_gradient_checkpointing: true
     dtype: bf16
     model_type: ~
@@ -129,13 +157,13 @@ reference:
 
 enable_response_mask: True
 action_sep: "||"
-# use_turn_scores: True # important to GAE when applying token-level rewards to token-level advantages. If False, will take the sum of scores as the reward for the last turn.
+use_turn_scores: True # important to GAE when applying token-level rewards to token-level advantages. If False, will take the sum of scores as the reward for the last turn.
 enable_think: True # False -> no think RL
 max_actions_per_traj: 5
 reward_normalization:
   grouping: tags # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
   method: identity # asym_clip / identity / mean_std
-whiten_rewards: true
+whiten_rewards: False
 
 custom_envs:
   TicTacToe:
@@ -145,8 +173,8 @@ custom_envs:
     max_tokens: 100
     grid_vocab: false
     env_config:
-      built_in_opponent: mcts
-      render_mode: text
+      random_opponent: true
+      render_mode: "text"
 
 train_env_manager:
   format_penalty: 0.05 # sokoban env penalty_for_step=-0.1
