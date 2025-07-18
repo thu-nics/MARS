@@ -42,9 +42,9 @@ logging_steps: 1
 eval_steps: 5
 resume_from_checkpoint: false
 
-rollout_batch_size: 128
-val_batch_size: 1024
-sequence_length: 12288
+rollout_batch_size: 32
+val_batch_size: 64
+sequence_length: 2048
 
 critic_warmup: 5
 reward_clip: 2
@@ -60,8 +60,8 @@ whiten_advantages: true
 entropy_loss_coef: 0.01
 loss_agg_mode: "token-mean"
 
-pretrain: /mnt/public/algm/models/Qwen3-4B/
-reward_pretrain: /mnt/public/algm/models/Qwen3-4B/
+pretrain: /mnt/public/algm/models/Qwen3-0.6B/
+reward_pretrain: /mnt/public/algm/models/Qwen3-0.6B/
 
 actor_train:
   model_args:
@@ -81,16 +81,19 @@ actor_train:
   data_args:
     template: qwen3
   strategy_args:
-    strategy_name: megatron_train
+    strategy_name: deepspeed_train
     strategy_config:
-      sequence_parallel: true
-      tensor_model_parallel_size: 2
-      pipeline_model_parallel_size: 1
-      expert_model_parallel_size: 1
-      use_distributed_optimizer: true
-      recompute_granularity: full
-      accumulate_allreduce_grads_in_fp32: true
-      check_for_nan_in_loss_and_grad: false
+      ${deepspeed_zero3_cpuoffload}
+    # strategy_name: megatron_train
+    # strategy_config:
+    #   sequence_parallel: true
+    #   tensor_model_parallel_size: 2
+    #   pipeline_model_parallel_size: 1
+    #   expert_model_parallel_size: 1
+    #   use_distributed_optimizer: true
+    #   recompute_granularity: full
+    #   accumulate_allreduce_grads_in_fp32: true
+    #   check_for_nan_in_loss_and_grad: false
   device_mapping: list(range(0,8))
   infer_batch_size: 2
 
@@ -125,7 +128,7 @@ actor_infer:
     disable_gradient_checkpointing: true
     dtype: bf16
   generating_args:
-    max_new_tokens: 4096 # single-turn response length
+    max_new_tokens: 1024 # single-turn response length
     top_p: 0.99
     top_k: 100
     num_beams: 1

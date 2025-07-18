@@ -76,7 +76,10 @@ def union_two_dict(dict1: Dict, dict2: Dict):
     """
     for key, val in dict2.items():
         if key in dict1:
-            assert dict2[key] == dict1[key], f"{key} in meta_dict1 and meta_dict2 are not the same object"
+            if isinstance(val, dict):
+                val = union_two_dict(dict1[key], val)
+            else:
+                assert dict2[key] == dict1[key], f"{key} in meta_dict1 and meta_dict2 are not the same object"
         dict1[key] = val
 
     return dict1
