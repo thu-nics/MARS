@@ -9,6 +9,7 @@ from textwrap import dedent
 import json
 from typing import Optional, Dict, Any
 import re
+from PIL import Image
 
 
 class TicTacToe(BaseDiscreteActionEnv):
@@ -202,14 +203,13 @@ class TicTacToe(BaseDiscreteActionEnv):
         }
         return observation, reward, done, info
 
-    def render(self, mode=None):
-        render_mode = mode if mode is not None else self.render_mode
-        if render_mode == "text":
+    def render(self, mode: str = "text"):
+        if mode == "text":
             return self._render_text()
-        elif render_mode == "rgb_array":
+        elif mode == "rgb_array":
             return self._render_rgb_array()
         else:
-            raise ValueError(f"Invalid mode: {render_mode}")
+            raise ValueError(f"Invalid mode: {mode}")
 
     def _render_text(self):
         """Render the game state as text."""
@@ -254,7 +254,14 @@ class TicTacToe(BaseDiscreteActionEnv):
                         color = "red" if piece == "x" else "blue"
                         ax.text(j, i, piece.upper(), fontsize=30, ha="center", va="center", color=color)
         ax.set_aspect("equal")
-        return fig
+
+        # convert matplotlib figure to numpy array, avoid file I/O
+        fig.canvas.draw()
+        buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        plt.close(fig)
+        image = Image.fromarray(buf)
+        return image
 
     def close(self):
         """Close the environment."""
