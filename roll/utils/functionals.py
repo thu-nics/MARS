@@ -1,12 +1,13 @@
 import enum
 import traceback
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Callable
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from tensordict import TensorDict
 
+from roll.pipeline.agentic.agentic_config import AgenticConfig
 from roll.pipeline.rlvr.rlvr_config import RLVRConfig
 from roll.utils.kl_controller import AdaptiveKLController
 from roll.utils.logging import get_logger
@@ -636,6 +637,98 @@ def get_sample_level_mask(data: "DataProto", pipeline_config: RLVRConfig):
     return data, mask_metrics
 
 
+def get_score_normalize_fn(rn_cfg, running_ctrl=None) -> Callable:
+    grouping, method = rn_cfg.grouping, rn_cfg.method
+    if method == "identity" or method == "none":
+        norm_func = lambda x: x
+    elif method == "mean":
+        norm_func = lambda x: (x - x.mean(dim=-1, keepdim=True))
+    elif method == "mean_std":
+        norm_func = lambda x: (
+            (x - x.mean(dim=-1, keepdim=True)) / (x.std(dim=-1, keepdim=True) + 1e-6)
+            if x.std(dim=-1, keepdim=True).abs().max() > 1e-6
+            else torch.zeros_like(x)
+        )  # stable to bf16 than x.std()
+    elif method == "asym_clip":
+        norm_func = lambda x: (
+            (x - x.mean(dim=-1, keepdim=True)) / (x.std(dim=-1, keepdim=True) + 1e-6)
+            if x.std(dim=-1, keepdim=True).abs().max() > 1e-6
+            else torch.zeros_like(x)
+        ).clamp(min=-1, max=3)
+    elif method == "running" and running_ctrl is not None:
+        running = running_ctrl["domain"]
+        def norm_func(x):
+            running.update(x)
+            mean = running.mean
+            std = running.std + torch.finfo(x.dtype).eps
+            return (x - mean) / std
+    else:
+        raise ValueError(f"Invalid normalization method: {method}")
+    return norm_func
+
+
+@torch.no_grad()
+def reward_postprocess_agentic(data: "DataProto", pipeline_config: AgenticConfig, running_ctrl=None, kl_ctrl=None):
+    # 0. get rewards (process token_level_rewards directly if use_turn_scores is True)
+    if pipeline_config.use_turn_scores:
+        rewards = data.batch["token_level_rewards"].clone().detach()
+    else:
+        rewards = data.batch["response_level_rewards"].clone().detach()
+
+    metrics = {"critic/reward_clip_frac": 0.0}
+
+    # 1. normalize (identity/mean/mean_std/asym_clip/running)
+    score_norm_fn = get_score_normalize_fn(rn_cfg=pipeline_config.reward_normalization, running_ctrl=running_ctrl)
+    rewards = score_norm_fn(rewards)
+
+    # 2. clip
+    if pipeline_config.reward_clip:
+        reward_clip_frac = compute_clip_fraction(
+            values=rewards,
+            clip_max=pipeline_config.reward_clip,
+            clip_min=-pipeline_config.reward_clip,
+        )
+        rewards = torch.clamp(
+            rewards,
+            min=-pipeline_config.reward_clip,
+            max=pipeline_config.reward_clip,
+        )
+        metrics = {"critic/reward_clip_frac": reward_clip_frac}
+
+    if pipeline_config.use_turn_scores:
+        data.batch["token_level_rewards"] = rewards[:, 1:]
+    else:
+        data.batch["response_level_rewards"] = rewards
+        data.batch["token_level_rewards"] = expand_to_token_level(data)
+
+    # 3. compute token-level kl
+    # TODO: (yhn) Here, kl is used as a per-token reward/penalty for rl.
+    # We should consider using a separate (and differentiable) kl loss in the future,
+    # as mentioned in the deepseek grpo paper: https://arxiv.org/abs/2402.03300
+    token_level_rewards = data.batch["token_level_rewards"]
+    if pipeline_config.add_token_level_kl:
+        if kl_ctrl is not None and "ref_log_probs" in data.batch.keys():
+            kld = compute_approx_kl(
+                log_probs=data.batch["old_log_probs"],
+                log_probs_base=data.batch["ref_log_probs"],
+                action_mask=data.batch["response_mask"][:, 1:],
+                kl_penalty=pipeline_config.kl_penalty,
+            )
+            beta = kl_ctrl.value
+        else:
+            kld = torch.zeros_like(data.batch["response_mask"][:, 1:], dtype=torch.float32)
+            beta = 0
+        token_level_rewards = token_level_rewards - beta * kld
+        data.batch["token_level_rewards"] = token_level_rewards
+        current_kl = masked_mean(kld, mask=data.batch["response_mask"][:, 1:], dim=-1)
+        current_kl = torch.mean(current_kl, dim=0).item()
+        kl_ctrl.update(current=current_kl, n_steps=data.batch.batch_size[0])
+        metrics["critic/kl"] = current_kl
+        metrics["critic/kl_coef"] = beta
+
+    return data, metrics
+
+
 @torch.no_grad()
 def apply_kl_penalty(data: "DataProto", kl_ctrl: AdaptiveKLController, kl_penalty="kl"):
     response_mask = data.batch["response_mask"][:, 1:]
@@ -702,6 +795,7 @@ def compute_advantage(
             token_level_rewards=token_level_rewards, gamma=gamma, lambd=lambd
         )
     elif adv_estimator == "grpo":
+        # NOTE: For grpo, remember to manually setting AgenticConfig.reward_normalization to mean_std
         advantages, returns = compute_reinforce_return(
             token_level_rewards=token_level_rewards, gamma=gamma, lambd=lambd
         )

@@ -15,6 +15,7 @@ from roll.pipeline.agentic.agentic_config import AgenticConfig
 from roll.pipeline.agentic.utils import dump_rollout_render
 from roll.pipeline.base_pipeline import BasePipeline
 from roll.utils.functionals import (
+    reward_postprocess_agentic,
     apply_kl_penalty,
     compute_advantage,
     reduce_metrics,
@@ -201,44 +202,45 @@ class AgenticPipeline(BasePipeline):
                         batch_grouped = batch.group_by(keys=grouping)
                     batch_list = []
                     for group_name, group_batch in batch_grouped.items():
-                        score_norm_fn = get_score_normalize_fn(rn_cfg=self.pipeline_config.reward_normalization)
-                        scores: torch.Tensor = group_batch.batch["scores"].clone()
-                        penalty: torch.Tensor = group_batch.batch["penalty"]
-                        acc_scores = scores.sum(dim=-1)
-                        normalized_acc_scores = acc_scores + penalty
-                        normalized_acc_scores = score_norm_fn(normalized_acc_scores)
-                        group_batch.batch["response_level_rewards"] = normalized_acc_scores
-                        if self.pipeline_config.reward_clip:
-                            reward_clip_frac = compute_clip_fraction(
-                                values=group_batch.batch["response_level_rewards"],
-                                clip_max=self.pipeline_config.reward_clip,
-                                clip_min=-self.pipeline_config.reward_clip,
-                            )
-                            metrics["critic/reward_clip_frac"] = reward_clip_frac
-                            group_batch.batch["response_level_rewards"] = torch.clamp(
-                                group_batch.batch["response_level_rewards"],
-                                min=-self.pipeline_config.reward_clip,
-                                max=self.pipeline_config.reward_clip,
+                        # 0. get rewards
+                        with Timer(name="get_rewards", logger=None) as get_rewards_timer:
+                            scores: torch.Tensor = group_batch.batch["scores"].clone()
+                            group_batch.batch["token_level_rewards"] = scores
+                            penalty: torch.Tensor = group_batch.batch["penalty"]
+                            acc_scores = scores.sum(dim=-1)
+                            group_batch.batch["response_level_rewards"] = acc_scores + penalty
+                        metrics["time/get_rewards"] = get_rewards_timer.last
+
+                        # 1. postprocess rewards in group (normalize, clip, compute token-level kl)
+                        with Timer(name="reward_postprocess", logger=None) as reward_postprocess_timer:
+                            group_batch, group_metrics = reward_postprocess_agentic(
+                                data=group_batch,
+                                pipeline_config=self.pipeline_config,
+                                running_ctrl=self.running,
+                                kl_ctrl=self.kl_ctrl,
                             )
 
-                        group_batch, kl_metrics = apply_kl_penalty(
-                            data=group_batch, kl_ctrl=self.kl_ctrl, kl_penalty=self.pipeline_config.kl_penalty
-                        )
+                        # 2. update metrics and add group_batch to batch_list
+                        metrics.update(group_metrics)
+                        metrics["time/reward_postprocess"] = reward_postprocess_timer.last
                         batch_list.append(group_batch)
                     batch = DataProto.concat(batch_list)
                     batch.reorder(indices=torch.argsort(batch.batch["prompt_id"]))
                     batch.pop("prompt_id")
-                    # advantage是全局batch计算，还是group内计算？
-                    batch = compute_advantage(
-                        data=batch,
-                        gamma=self.pipeline_config.gamma,
-                        lambd=self.pipeline_config.lambd,
-                        adv_estimator=self.pipeline_config.adv_estimator,
-                        advantage_clip=self.pipeline_config.advantage_clip,
-                        whiten_advantages=self.pipeline_config.whiten_advantages,
-                        whiten_rewards=self.pipeline_config.whiten_rewards,
-                    )
-                    # print(batch)
+
+                    # 3. compute adv in the whole batch
+                    # (yhn) computing adv does not require group_by, so we can compute adv in the whole batch
+                    with Timer(name="compute_adv", logger=None) as compute_adv_timer:
+                        batch = compute_advantage(
+                            data=batch,
+                            gamma=self.pipeline_config.gamma,
+                            lambd=self.pipeline_config.lambd,
+                            adv_estimator=self.pipeline_config.adv_estimator,
+                            advantage_clip=self.pipeline_config.advantage_clip,
+                            whiten_advantages=self.pipeline_config.whiten_advantages,
+                            whiten_rewards=self.pipeline_config.whiten_rewards,
+                        )
+                    metrics["time/compute_adv"] = compute_adv_timer.last
 
                     # (DEBUG) Dump data to log dir
                     output_dir = os.environ["ROLL_OUTPUT_DIR"]
@@ -254,7 +256,6 @@ class AgenticPipeline(BasePipeline):
                         pickle.dump(batch, f)
                     logger.info(f"Batch dumped to {output_path}, took {time.time() - start:.2f} seconds")
 
-                metrics.update(kl_metrics)
                 metrics["time/adv"] = timer.last
 
                 if self.pipeline_config.adv_estimator == "gae":
@@ -388,27 +389,3 @@ def compute_data_metrics(batch):
             }
         )
     return metrics
-
-
-def get_score_normalize_fn(rn_cfg) -> Callable:
-    grouping, method = rn_cfg.grouping, rn_cfg.method
-    if method == "mean_std":
-        norm_func = lambda x: (
-            (x - x.mean(dim=-1, keepdim=True)) / (x.std(dim=-1, keepdim=True) + 1e-6)
-            if x.std(dim=-1, keepdim=True).abs().max() > 1e-6
-            else torch.zeros_like(x)
-        )  # stable to bf16 than x.std()
-    elif method == "mean":
-        norm_func = lambda x: (x - x.mean(dim=-1, keepdim=True))
-    elif method == "asym_clip":
-        norm_func = lambda x: (
-            (x - x.mean(dim=-1, keepdim=True)) / (x.std(dim=-1, keepdim=True) + 1e-6)
-            if x.std(dim=-1, keepdim=True).abs().max() > 1e-6
-            else torch.zeros_like(x)
-        ).clamp(min=-1, max=3)
-    elif method == "identity":
-        norm_func = lambda x: x
-    else:
-        raise ValueError(f"Invalid normalization method: {method}")
-
-    return norm_func

@@ -141,9 +141,10 @@ class AgenticConfig(BaseConfig):
     use_reward_scaling: bool = field(default=False, metadata={"help": "Use reward scaling"})
     add_len_reward: bool = field(default=False)
     reward_clip: float = field(default=None, metadata={"help": "reward clip value."})
-    use_reward_norm: bool = field(
-        default=False, metadata={"help": "Use reward normalization. Only applicable if use_reward_scaling is True."}
-    )
+    # deprecated (not used)
+    # use_reward_norm: bool = field(
+    #     default=False, metadata={"help": "Use reward normalization. Only applicable if use_reward_scaling is True."}
+    # )
     whiten_rewards: bool = field(default=False, metadata={"help": "Whiten the rewards before compute advantages."})
     whiten_advantages: bool = field(default=False, metadata={"help": "Whiten the advantage."})
     advantage_clip: float = field(default=None, metadata={"help": "advantage_clip value"})
