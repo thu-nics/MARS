@@ -81,19 +81,16 @@ actor_train:
   data_args:
     template: qwen3
   strategy_args:
-    strategy_name: deepspeed_train
+    strategy_name: megatron_train
     strategy_config:
-      ${deepspeed_zero3_cpuoffload}
-    # strategy_name: megatron_train
-    # strategy_config:
-    #   sequence_parallel: true
-    #   tensor_model_parallel_size: 2
-    #   pipeline_model_parallel_size: 1
-    #   expert_model_parallel_size: 1
-    #   use_distributed_optimizer: true
-    #   recompute_granularity: full
-    #   accumulate_allreduce_grads_in_fp32: true
-    #   check_for_nan_in_loss_and_grad: false
+      sequence_parallel: true
+      tensor_model_parallel_size: 2
+      pipeline_model_parallel_size: 1
+      expert_model_parallel_size: 1
+      use_distributed_optimizer: true
+      recompute_granularity: full
+      accumulate_allreduce_grads_in_fp32: true
+      check_for_nan_in_loss_and_grad: false
   device_mapping: list(range(0,8))
   infer_batch_size: 2
 
@@ -176,8 +173,8 @@ custom_envs:
     max_tokens: 100
     grid_vocab: false
     env_config:
-      random_opponent: true
-      render_mode: "text"
+      built_in_opponent: random
+      render_mode: text
 
 train_env_manager:
   format_penalty: 0.05 # sokoban env penalty_for_step=-0.1
