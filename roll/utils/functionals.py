@@ -637,34 +637,47 @@ def get_sample_level_mask(data: "DataProto", pipeline_config: RLVRConfig):
     return data, mask_metrics
 
 
-def get_score_normalize_fn(rn_cfg, running_ctrl=None) -> Callable:
+def score_normalize(x, rn_cfg, running_ctrl=None, mask=None) -> torch.Tensor:
     grouping, method = rn_cfg.grouping, rn_cfg.method
     if method == "identity" or method == "none":
-        norm_func = lambda x: x
-    elif method == "mean":
-        norm_func = lambda x: (x - x.mean(dim=-1, keepdim=True))
+        return x
+    else:
+        if mask is None:
+            mean = x.mean()
+            std = x.std()
+        else:
+            mean = masked_mean(x, mask)
+            var = masked_var(x, mask)
+            std = torch.sqrt(var)
+
+    if method == "mean":
+        x_norm = (x - mean)
     elif method == "mean_std":
-        norm_func = lambda x: (
-            (x - x.mean(dim=-1, keepdim=True)) / (x.std(dim=-1, keepdim=True) + 1e-6)
-            if x.std(dim=-1, keepdim=True).abs().max() > 1e-6
+        x_norm = (
+            (x - mean) / (std + 1e-6)
+            if std.abs().max() > 1e-6
             else torch.zeros_like(x)
         )  # stable to bf16 than x.std()
     elif method == "asym_clip":
-        norm_func = lambda x: (
-            (x - x.mean(dim=-1, keepdim=True)) / (x.std(dim=-1, keepdim=True) + 1e-6)
-            if x.std(dim=-1, keepdim=True).abs().max() > 1e-6
+        x_norm = (
+            (x - mean) / (std + 1e-6)
+            if std.abs().max() > 1e-6
             else torch.zeros_like(x)
         ).clamp(min=-1, max=3)
     elif method == "running" and running_ctrl is not None:
-        running = running_ctrl["domain"]
-        def norm_func(x):
-            running.update(x)
-            mean = running.mean
-            std = running.std + torch.finfo(x.dtype).eps
-            return (x - mean) / std
+        running_ctrl.update(x)
+        mean = running_ctrl.mean
+        std = running_ctrl.std
+        x_norm = (
+            (x - mean) / (std + 1e-6)
+            if std.abs().max() > 1e-6
+            else torch.zeros_like(x)
+        )
     else:
         raise ValueError(f"Invalid normalization method: {method}")
-    return norm_func
+    if mask is not None:
+        x_norm = x_norm * mask
+    return x_norm
 
 
 @torch.no_grad()
@@ -672,14 +685,20 @@ def reward_postprocess_agentic(data: "DataProto", pipeline_config: AgenticConfig
     # 0. get rewards (process token_level_rewards directly if use_turn_scores is True)
     if pipeline_config.use_turn_scores:
         rewards = data.batch["token_level_rewards"].clone().detach()
+        mask = torch.tensor(rewards != 0, dtype=rewards.dtype)
     else:
         rewards = data.batch["response_level_rewards"].clone().detach()
+        mask = None
 
     metrics = {"critic/reward_clip_frac": 0.0}
 
     # 1. normalize (identity/mean/mean_std/asym_clip/running)
-    score_norm_fn = get_score_normalize_fn(rn_cfg=pipeline_config.reward_normalization, running_ctrl=running_ctrl)
-    rewards = score_norm_fn(rewards)
+    rewards = score_normalize(
+        rewards,
+        rn_cfg=pipeline_config.reward_normalization,
+        running_ctrl=running_ctrl,
+        mask=mask,
+    )
 
     # 2. clip
     if pipeline_config.reward_clip:

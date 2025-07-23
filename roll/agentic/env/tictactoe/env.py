@@ -275,21 +275,30 @@ if __name__ == "__main__":
     print("Basic unit test:")
     print("-" * 100)
     env = TicTacToe()
-    env.reset()
-    done = False
-    while not done:
-        print("-" * 100)
-        prefix_prompt = env.get_prompt(mode="prefix")
-        print(f"System prompt: \n{prefix_prompt['system']}")
-        print(f"User prompt: \n{prefix_prompt['user']}")
-        print(f"State prompt: \n{env.get_prompt(mode='state')}")
-        print("-" * 100)
-        action = random.choice(list(env.get_all_actions().values()))
-        # action = "X(0,0)"
-        print(f"Player {env.current_player} taking action: {action}")
-        observations, rewards, done, info = env.step(action)
-        print(f"observations: \n{observations}")
-        print(f"rewards: {rewards}")
-        print(f"done: {done}")
-        print(f"info: {info}")
-        print("-" * 100)
+    
+    results = []
+    for i in range(100):
+        print('-' * 100)
+        print(f'Episode {i}')
+        print('-' * 100)
+        env.reset()
+        done = False
+        while not done:
+            prefix_prompt = env.get_prompt(mode="prefix")
+            print(f"System prompt: \n{prefix_prompt['system']}")
+            print(f"User prompt: \n{prefix_prompt['user']}")
+            print(f"State prompt: \n{env.get_prompt(mode='state')}")
+            # action = random.choice(list(env.get_all_actions().values()))
+            # action = "X(0,0)"
+            action = env.mcts_bot.step(env.state)
+            print(f"Player {env.current_player} taking action: {action}")
+            observations, rewards, done, info = env.step(action)
+            print(f"observations: \n{observations}")
+            print(f"rewards: {rewards}")
+            print(f"done: {done}")
+            print(f"info: {info}")
+            print("-" * 100)
+        results.append(info['winner'])
+    print("player 0 win rate: ", results.count(0) / len(results))
+    print("player 1 win rate: ", results.count(1) / len(results))
+    print("draw rate: ", results.count(-1) / len(results))

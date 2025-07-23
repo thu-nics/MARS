@@ -104,7 +104,7 @@ class AgenticPipeline(BasePipeline):
         else:
             self.set_checkpoint_clusters(self.actor_train)
 
-        self.running = RunningMoments()
+        self.running = {}
 
     @torch.no_grad()
     def run(self):
@@ -202,6 +202,9 @@ class AgenticPipeline(BasePipeline):
                         batch_grouped = batch.group_by(keys=grouping)
                     batch_list = []
                     for group_name, group_batch in batch_grouped.items():
+                        # print(f"group_name: {group_name}")
+                        if group_name not in self.running:
+                            self.running[group_name] = RunningMoments()
                         # 0. get rewards
                         with Timer(name="get_rewards", logger=None) as get_rewards_timer:
                             scores: torch.Tensor = group_batch.batch["scores"].clone()
@@ -216,7 +219,7 @@ class AgenticPipeline(BasePipeline):
                             group_batch, group_metrics = reward_postprocess_agentic(
                                 data=group_batch,
                                 pipeline_config=self.pipeline_config,
-                                running_ctrl=self.running,
+                                running_ctrl=self.running[group_name],
                                 kl_ctrl=self.kl_ctrl,
                             )
 
