@@ -54,6 +54,8 @@ adv_estimator: "reinforce"
 # pg_clip: 0.1
 #dual_clip_loss: True
 init_kl_coef: 0.0
+use_kl_loss: true
+kl_loss_coef: 0.05
 
 whiten_advantages: true
 entropy_loss_coef: 0.01
@@ -129,12 +131,12 @@ reference:
 
 enable_response_mask: True
 action_sep: "||"
-# use_turn_scores: True # important to GAE when applying token-level rewards to token-level advantages. If False, will take the sum of scores as the reward for the last turn.
+use_turn_scores: True # important to GAE when applying token-level rewards to token-level advantages. If False, will take the sum of scores as the reward for the last turn.
 enable_think: True # False -> no think RL
 max_actions_per_traj: 5
 reward_normalization:
   grouping: tags # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
-  method: identity # asym_clip / identity / mean_std
+  method: mean_std # asym_clip / identity / mean_std
 whiten_rewards: true
 
 custom_envs:
