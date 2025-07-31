@@ -20,6 +20,7 @@ class TicTacToe(BaseDiscreteActionEnv):
         self.config = config
         self.render_mode = config.render_mode
         self.built_in_opponent = config.built_in_opponent
+        self.opponent_first_move = config.opponent_first_move
 
         BaseDiscreteActionEnv.__init__(self)
 
@@ -50,27 +51,23 @@ class TicTacToe(BaseDiscreteActionEnv):
         try:
             with all_seed(seed):
                 self.state = self._env.new_initial_state()
+                if self.built_in_opponent != "none" and self.opponent_first_move:
+                    opponent_action = self._opponent_step()
+                    self._step(opponent_action)
                 return self.render()
         except (RuntimeError, RuntimeWarning) as e:
             next_seed = abs(hash(str(seed))) % (2**32) if seed is not None else 0
             return self.reset(next_seed)
 
-    def step(self, action_str):
-        observations, _, done, info = self._step(action_str)
-        # If the opponent is random, we need to let the opponent take action
-        if self.current_player == 1 and not done:
-            if self.built_in_opponent == "random":
-                action = random.choice(list(self.get_all_actions().values()))
-            elif self.built_in_opponent == "mcts":
-                action = self.mcts_bot.step(self.state)
-            else:
-                raise ValueError(f"Invalid built-in opponent: {self.built_in_opponent}")
-            # print(f"Built-in opponent {self.built_in_opponent} taking action: {self._action_to_string(self.current_player, action)}")
-            observations, _, done, info = self._step(action)
-        reward = 0
-        if done:
-            reward = self.state.returns()[0]
-        return observations, reward, done, info
+    def step(self, action):
+        observations, reward, done, info = self._step(action)
+        # If chose to play with built-in opponent, we need to let the opponent take action
+        if self.built_in_opponent != "none" and not done:
+            opponent_action = self._opponent_step()
+            observations, reward, done, info = self._step(opponent_action)
+        # TODO: return reward[0] for backward compatibility with the current single agent setting
+        # need modification for implementing self-play
+        return observations, reward[0], done, info
 
     def _step(self, action):
         if isinstance(action, str):
@@ -85,16 +82,20 @@ class TicTacToe(BaseDiscreteActionEnv):
         info = self._get_info()
         return observations, rewards, done, info
 
+    def _opponent_step(self):
+        if self.built_in_opponent == "random":
+            action = random.choice(list(self.get_all_actions().values()))
+        elif self.built_in_opponent == "mcts":
+            action = self.mcts_bot.step(self.state)
+        else:
+            raise ValueError(f"Invalid built-in opponent: {self.built_in_opponent}")
+        # print(f"Built-in {self.built_in_opponent} opponent taking action: {self._action_to_string(self.current_player, action)}")
+        return action
+
     def get_prompt(self, mode="prefix", think=True):
         if mode == "prefix":
             prefix_prompt = self._get_prefix_prompt(think)
             return prefix_prompt
-        elif mode == "state":
-            state_prompt = self._get_state_prompt()
-            return state_prompt
-        elif mode == "action":
-            action_prompt = self._get_action_prompt()
-            return action_prompt
         else:
             raise ValueError(f"Invalid prompt mode: {mode}")
 
@@ -107,51 +108,30 @@ class TicTacToe(BaseDiscreteActionEnv):
             "3. The player who first places three of their marks in a horizontal, vertical, or diagonal line wins.\n"
             "4. If all cells are filled and no player wins, the game ends in a draw."
         )
-        # mark = "X" if self.current_player == 0 else "O"
-        mark = "X"
+        mark = "O" if self.current_player == 1 else "X"
         opponent_mark = "O" if mark == "X" else "X"
         information = (
             f"1. Your mark is {mark}. You are competing with another player controlling the mark {opponent_mark}.\n"
             "2. In each of your turns:\n"
             "   a. The game state demonstrates the current board with a three-line text grid, where 'X' and 'O' are the marks of the two players, and '_' represents empty cells.\n"
             "   b. You need to chose an action to place your mark in an empty cell, based on the given game state and the history of your decisions.\n"
-            f"   c. All legal actions are provided in the format of `<{mark}({{row}},{{column}})>`, where `{mark}` is your mark, "
+            f"   c. All legal actions for the current turn are provided in the format of `<{mark}({{row}},{{column}})>`, where `{mark}` is your mark, "
             "and {row} and {column} are integers indicating the row and column of the cell to place your mark."
         )
-        # if think:
-        #     FORMAT_PROMPT = "<think>[your thinking]</think><answer>[your action]</answer>"
-        #     FORMAT_PROMPT_EXAMPLE = f"<think>Okay, let's see. I'm playing a game of tic-tac-toe. This is my first turn. I will take <X(0,0)> because ...</think><answer><X(0,0)></answer>"
-        # else:
         FORMAT_PROMPT = "<answer>{your chosen action}</answer>"
-        FORMAT_PROMPT_EXAMPLE = f"<answer><X(0,0)></answer>"
+        FORMAT_PROMPT_EXAMPLE = f"<answer><{mark}(0,0)></answer>"
         instructions = (
-            f"Always choose only one action from the legal actions and output `{FORMAT_PROMPT}` with no extra text. "
+            f"Always choose only one action from the legal actions and output `{FORMAT_PROMPT}` with no extra text after you finish the thinking process. "
             f"For example, `{FORMAT_PROMPT_EXAMPLE}`. "
-            "After you have chosen an action, I will provide the next game state and you will continue to play.\n"
-            # "Strictly follow the above format. Responses that do not follow the format will result in immediate loss of the game.\n"
-            "Please output the answer with given format with no extra text after you finish the thinking process.\n\n"
+            "Strictly follow the above format. Responses that do not follow the format will result in immediate loss of the game."
         )
         user_prompt = (
             f"GAME RULES:\n{rules}\n\n"
             f"PLAYER INFORMATION:\n{information}\n\n"
-            f"RESPONSE INSTRUCTIONS:\n{instructions}"
+            f"RESPONSE INSTRUCTIONS:\n{instructions}\n\n"
         )
         prefix_prompt = {"system": system_prompt, "user": user_prompt}
         return prefix_prompt
-
-    def _get_state_prompt(self):
-        state_prompt = (
-            "This is the current snapshot of the board, "
-            "where 'X' and 'O' are the marks of the two players, and '_' represents empty cells."
-        )
-        return state_prompt
-
-    def _get_action_prompt(self):
-        action_prompt = (
-            "Each action is represented as <{mark}({row},{column})>, where {mark} is your mark, "
-            "and {row} and {column} are integers indicating the row and column of the cell to place your mark."
-        )
-        return action_prompt
 
     def get_all_actions(self):
         return self._get_legal_actions(self.current_player)
@@ -166,6 +146,8 @@ class TicTacToe(BaseDiscreteActionEnv):
         return legal_actions
 
     def _action_to_string(self, player_id, action):
+        if isinstance(action, str):
+            return action
         mark = "X" if player_id == 0 else "O"
         row = action // 3
         column = action % 3
@@ -187,7 +169,9 @@ class TicTacToe(BaseDiscreteActionEnv):
             "player_1_return": returns[1],
             "winner": winner,
             "lose_for_wrong_format": 0,
-            "success": winner == 0,
+            "player_0_success": winner == 0,
+            "player_1_success": winner == 1,
+            "draw": winner == -1,
         }
 
     def get_losing_state(self):
@@ -199,7 +183,9 @@ class TicTacToe(BaseDiscreteActionEnv):
             "player_1_return": 1,
             "winner": 1,
             "lose_for_wrong_format": 1,
-            "success": 0,
+            "player_0_success": 0,
+            "player_1_success": 0,
+            "draw": 0,
         }
         return observation, reward, done, info
 
@@ -287,10 +273,8 @@ if __name__ == "__main__":
             prefix_prompt = env.get_prompt(mode="prefix")
             print(f"System prompt: \n{prefix_prompt['system']}")
             print(f"User prompt: \n{prefix_prompt['user']}")
-            print(f"State prompt: \n{env.get_prompt(mode='state')}")
-            # action = random.choice(list(env.get_all_actions().values()))
-            # action = "X(0,0)"
-            action = env.mcts_bot.step(env.state)
+            action = random.choice(list(env.get_all_actions().values()))
+            # action = env.mcts_bot.step(env.state)
             print(f"Player {env.current_player} taking action: {action}")
             observations, rewards, done, info = env.step(action)
             print(f"observations: \n{observations}")

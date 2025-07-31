@@ -662,17 +662,19 @@ class EnvManager:
                 # ensure the last message is user message.
                 messages.append({"role": "user", "content": ""})
 
-            turn_idx_content = f"Information of Turn-{idx * 2 + 1}:\n\n"
+            # TODO: 这里的turn_idx对于未来self-play时的先后手玩家是不一样的，在self-play时需要修改
+            turn_idx_content = (
+                f"Information of Turn-{idx * 2 + 1}:\n\n"
+                "This is your turn. The game state and legal actions for this turn are provided below. "
+                "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
+            )
             messages[-1]["content"] += turn_idx_content
             if "state" in content:
                 messages[-1]["content"] += (
                     f"GAME STATE:\n{content['state']}\n\n"
                     f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}.\n\n"
-                    f"You are `X` and your opponent is `O`. Now this is your turn, please take an action from the legal actions above.\n"
-                    "After completing your thinking process, output your action using the format `<answer><X({i},{j})></answer>`, where X is your action and (i,j) represents the coordinates--no extra text should be included.\n\n"
                 )
             if "llm_raw_response" in content:
-                #       改成actions合理吗？
                 messages.append(
                     {
                         "role": "assistant",
