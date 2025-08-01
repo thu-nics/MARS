@@ -185,6 +185,9 @@ class EnvManager:
 
     def reset(self):
         entry = self.env_entry
+        is_self_play = entry["env"].built_in_opponent == "none"
+        current_player = 1 if entry["env"].opponent_first_move else 0   # Fix current player if not self-play
+        
         self.rollout_cache = {
             "env_id": entry["env_id"],
             "history": [],
@@ -192,7 +195,15 @@ class EnvManager:
             "tag": entry["tag"],
             "penalty": 0,
             "frames": [],
+            "is_self_play": is_self_play,
+            "current_player": current_player,
         }
+        
+        # For self-play, maintain separate histories for both players
+        if is_self_play:
+            self.rollout_cache["player_0_history"] = []  # e.g. X player in tic-tac-toe
+            self.rollout_cache["player_1_history"] = []  # e.g. O player in tic-tac-toe
+            self.rollout_cache["current_player"] = 0  # Track whose turn it is
 
         seed = self.group_seed + self.episode_id
 
@@ -210,6 +221,24 @@ class EnvManager:
             actions_left=entry["max_actions_per_traj"],
             num_actions_info=None,
         )
+        
+        # For self-play, also initialize both player histories
+        if is_self_play:
+            self.rollout_cache["player_0_history"] = self._update_cache_history(
+                self.rollout_cache["player_0_history"],
+                next_state=next_state,
+                legal_actions=entry["env"].get_all_actions(),
+                actions_left=entry["max_actions_per_traj"] // 2 + 1,    # assuming equal split of actions
+                num_actions_info=None,
+            )
+            self.rollout_cache["player_1_history"] = self._update_cache_history(
+                self.rollout_cache["player_1_history"],
+                next_state=next_state,
+                legal_actions=entry["env"].get_all_actions(),
+                actions_left=entry["max_actions_per_traj"] // 2 + 1,
+                num_actions_info=None,
+            )
+        
         self.episode_id += 1
         return self.rollout_cache
 
@@ -239,20 +268,27 @@ class EnvManager:
 
         entry = self.env_entry
         actions_left_before = entry["max_actions_per_traj"] - entry["status"].num_actions
+        is_self_play = self.rollout_cache['is_self_play']
 
         # execute actions in env
+        current_player = self.rollout_cache['current_player']
         valid_actions, lose_for_wrong_format = self._extract_map_valid_actions(entry, env_input["actions"])
         if lose_for_wrong_format:
-            _, acc_reward, turn_done, turn_info = entry["env"].get_losing_state()
+            _, acc_reward, turn_done, turn_info = entry["env"].get_losing_state(current_player)
             executed_actions = []
         else:
-            acc_reward, turn_info, turn_done, executed_actions = self._execute_actions(
-                entry["env"], valid_actions[:actions_left_before]
-            )
+            execute_result = self._execute_actions(entry["env"], valid_actions[:actions_left_before])
+            acc_reward, turn_info, turn_done, executed_actions = execute_result
+            # For self-play mode, handle list reward appropriately
+            if is_self_play and isinstance(acc_reward, (list, tuple)):
+                # In self-play mode, get reward for the current LLM player
+                acc_reward = acc_reward[current_player]
+            # TODO: currently setting as a format reward, should be able to handle both reward and penalty
             acc_reward += self.worker_config.format_penalty
 
         acc_reward += self.compute_length_penalty(env_input["token_length"])
 
+        # Update main history (for compatibility with single-agent mode)
         status, history = self._log_env_state(
             entry["status"],
             self.rollout_cache["history"],
@@ -266,6 +302,31 @@ class EnvManager:
             turn_info,
             env_input,
         )
+        
+        # For self-play, also update player-specific histories
+        if is_self_play:
+            player_history_key = f"player_{current_player}_history"
+            
+            # Update the specific player's history
+            _, player_history = self._log_env_state(
+                entry["status"],
+                self.rollout_cache[player_history_key],
+                entry["env"].render(),
+                entry["env"].get_all_actions(),
+                entry["max_actions_per_traj"],
+                executed_actions,
+                valid_actions,
+                acc_reward,
+                turn_done,
+                turn_info,
+                env_input,
+            )
+            self.rollout_cache[player_history_key] = player_history
+            
+            # Switch to next player for next turn if game is not done
+            if not turn_done:
+                self.rollout_cache["current_player"] = 1 - current_player
+        
         status.step += 1
         entry["status"] = status
 
@@ -349,10 +410,18 @@ class EnvManager:
                 status: EnvStatus = self.step(lm_output)
 
             if status.done and self.running:
-                rollout: DataProto = self.formulate_rollouts()
-                traj_group_id = f"{self.env_entry['group_id']}_{self.episode_id}_{self.group_seed}"
-                rollout.non_tensor_batch["traj_group_id"] = np.array([traj_group_id], dtype=object)
-                self.output_queue.put_nowait(rollout)
+                rollouts = self.formulate_rollouts()
+                for rollout in rollouts:
+                    traj_group_id = f"{self.env_entry['group_id']}_{self.episode_id}_{self.group_seed}"
+                    # For self-play, append player info to trajectory group ID
+                    if len(rollouts) > 1:  # Self-play mode
+                        player_id = rollout.non_tensor_batch.get("group_ids", [""])[0].split("_p")[-1]
+                        if player_id.isdigit():
+                            traj_group_id = f"{traj_group_id}_p{player_id}"
+                    
+                    rollout.non_tensor_batch["traj_group_id"] = np.array([traj_group_id], dtype=object)
+                    self.output_queue.put_nowait(rollout)
+                
                 self.rollout_cache = None
                 if self.episode_id >= self.worker_config.max_traj_per_env:
                     self.logger.debug(
@@ -426,13 +495,48 @@ class EnvManager:
         1. 每个env的trajectory 应该是一个rollout
         2. 每个rollout 应该是一个List[Dict]
         3. 每个Dict 应该是一个step的信息
+        4. For self-play mode, generate separate trajectories for both players
+        
+        Returns:
+            For single-agent mode: Single DataProto object (for backward compatibility)
+            For self-play mode: List of DataProto objects (one for each player)
         """
-        # print("rollout cache: ", self.rollout_cache)
+        is_self_play = self.rollout_cache["is_self_play"]
+        
+        if is_self_play:
+            # Generate trajectories for both players
+            rollouts = []
+            for player_id in [0, 1]:
+                player_rollout = self._formulate_single_rollout(player_id)
+                rollouts.append(player_rollout)
+            return rollouts
+        else:
+            # Single agent mode - return single rollout for backward compatibility
+            return [self._formulate_single_rollout()]
+
+    def _formulate_single_rollout(self, player_id=None):
+        """Generate a single rollout trajectory, optionally for a specific player in self-play mode"""
+        is_self_play = self.rollout_cache["is_self_play"]
+        
+        # Choose which history to use
+        if is_self_play and player_id is not None:
+            history_key = f"player_{player_id}_history"
+            rollout_history = self.rollout_cache[history_key]
+            # Create a modified rollout cache for this player
+            player_rollout_cache = self.rollout_cache.copy()
+            player_rollout_cache["history"] = rollout_history
+            # Add player identifier for trajectory grouping
+            player_rollout_cache["player_id"] = player_id
+        else:
+            player_rollout_cache = self.rollout_cache
+            
+        # print("rollout cache: ", player_rollout_cache)
         llm_input_texts, messages_list = self._format_messages(
-            env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=False
+            env_output=player_rollout_cache, prepare_for_update=True, use_raw_llm_response=False
         )
         # print("llm_input_texts: ", llm_input_texts)
         # print("messages_list: ", messages_list)
+        print(f"is_self_play: {is_self_play}, player_id: {player_id}, messages_list: {messages_list}")
         inputs = self.tokenizer(
             llm_input_texts, return_tensors="pt", padding=True, padding_side="left", truncation=False
         )
@@ -447,9 +551,9 @@ class EnvManager:
             },
             batch_size=input_ids.shape[0],
         )
-        scores = [[i["reward"] for i in self.rollout_cache["history"]]]
+        scores = [[i["reward"] for i in player_rollout_cache["history"]]]
         episode_scores = [sum(i) for i in scores]
-        penalty = self.rollout_cache["penalty"]
+        penalty = player_rollout_cache["penalty"]
 
         non_prompt_mask, score_tensor, response_mask = get_masks_and_scores(
             input_ids, self.tokenizer, scores, use_turn_scores=self.pipeline_config.use_turn_scores
@@ -475,13 +579,22 @@ class EnvManager:
                 "penalty": torch.Tensor([penalty]),
             }
         )
+        
+        # Create trajectory group ID that includes player info for self-play
+        env_id = player_rollout_cache["env_id"]
+        group_id = player_rollout_cache["group_id"]
+        if is_self_play and player_id is not None:
+            # Add player suffix to differentiate trajectories
+            env_id = f"{env_id}_p{player_id}"
+            group_id = f"{group_id}_p{player_id}"
+        
         llm_inputs.non_tensor_batch.update(
             {
-                "env_ids": np.array([self.rollout_cache["env_id"]], dtype=object),
-                "group_ids": np.array([self.rollout_cache["group_id"]], dtype=object),
+                "env_ids": np.array([env_id], dtype=object),
+                "group_ids": np.array([group_id], dtype=object),
                 "messages_list": np.array(messages_list, dtype=object),
-                "tags": np.array([self.rollout_cache["tag"]], dtype=object),
-                "frames": np.array([self.rollout_cache["frames"]], dtype=object),
+                "tags": np.array([player_rollout_cache["tag"]], dtype=object),
+                "frames": np.array([player_rollout_cache["frames"]], dtype=object),
             }
         )
         # pad to response length
@@ -501,7 +614,7 @@ class EnvManager:
         llm_inputs.batch["scores"] = score_tensor
         # for llm raw response
         llm_raw_text_list, _ = self._format_messages(
-            env_output=self.rollout_cache, prepare_for_update=True, use_raw_llm_response=True
+            env_output=player_rollout_cache, prepare_for_update=True, use_raw_llm_response=True
         )
         # print("llm_raw_text_list: ", llm_raw_text_list)
         llm_inputs.non_tensor_batch["turn_scores"] = np.array(scores, dtype=object)
@@ -516,7 +629,7 @@ class EnvManager:
         }
         custom_metric = {}
 
-        for turn in self.rollout_cache["history"]:
+        for turn in player_rollout_cache["history"]:
             for k, v in turn.get("info", {}).items():
                 if k == "success":
                     env_metric[k] = float(v)
@@ -526,15 +639,15 @@ class EnvManager:
                 custom_metric[k].append(float(v))
 
         for k, v in custom_metric.items():
-            # env_metric[k] = np.sum(v) / len(self.rollout_cache['history'])
+            # env_metric[k] = np.sum(v) / len(player_rollout_cache['history'])
             env_metric[k] = np.sum(v)
 
-        # if len(self.rollout_cache["history"]) > 0:
-        self.rollout_cache["history"][-1]["metrics"] = custom_metric
+        if len(player_rollout_cache["history"]) > 0:
+            player_rollout_cache["history"][-1]["metrics"] = custom_metric
 
         env_metric = {f"env/{entry['tag']}/{k}": v for k, v in env_metric.items()}
         env_metric["env/response_length"] = response_length
-        self.rollout_cache["metrics"] = env_metric
+        player_rollout_cache["metrics"] = env_metric
         llm_inputs.meta_info = {"metrics": env_metric}
         return llm_inputs
 
@@ -662,12 +775,21 @@ class EnvManager:
                 # ensure the last message is user message.
                 messages.append({"role": "user", "content": ""})
 
-            # TODO: 这里的turn_idx对于未来self-play时的先后手玩家是不一样的，在self-play时需要修改
-            turn_idx_content = (
-                f"Information of Turn-{idx * 2 + 1}:\n\n"
-                "This is your turn. The game state and legal actions for this turn are provided below. "
-                "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
-            )
+            # For self-play mode, adjust turn indexing based on current player
+            if self.rollout_cache["is_self_play"]:
+                # In self-play mode, both players are LLMs, so turn numbering should reflect actual turns
+                turn_idx_content = (
+                    f"Information of Turn-{idx + 1}:\n\n"
+                    "This is your turn. The game state and legal actions for this turn are provided below. "
+                    "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
+                )
+            else:
+                # Original logic for single-agent mode against built-in opponent
+                turn_idx_content = (
+                    f"Information of Turn-{idx * 2 + 1}:\n\n"
+                    "This is your turn. The game state and legal actions for this turn are provided below. "
+                    "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
+                )
             messages[-1]["content"] += turn_idx_content
             if "state" in content:
                 messages[-1]["content"] += (

@@ -60,14 +60,20 @@ class TicTacToe(BaseDiscreteActionEnv):
             return self.reset(next_seed)
 
     def step(self, action):
-        observations, reward, done, info = self._step(action)
+        observation, reward, done, info = self._step(action)
         # If chose to play with built-in opponent, we need to let the opponent take action
         if self.built_in_opponent != "none" and not done:
             opponent_action = self._opponent_step()
-            observations, reward, done, info = self._step(opponent_action)
-        # TODO: return reward[0] for backward compatibility with the current single agent setting
-        # need modification for implementing self-play
-        return observations, reward[0], done, info
+            observation, reward, done, info = self._step(opponent_action)
+        
+        # For self-play mode (built_in_opponent == "none"), return rewards for both players
+        # For backward compatibility with single agent, return reward[0]/reward[1] for single agent
+        if self.built_in_opponent == "none":
+            return observation, reward, done, info
+        elif not self.opponent_first_move:
+            return observation, reward[0], done, info
+        else:
+            return observation, reward[1], done, info
 
     def _step(self, action):
         if isinstance(action, str):
@@ -76,11 +82,11 @@ class TicTacToe(BaseDiscreteActionEnv):
             raise RuntimeError("Cannot apply action on a terminal state.")
 
         self.state.apply_action(action)
-        observations = self.render()
+        observation = self.render()
         rewards = self.state.rewards()
         done = self.state.is_terminal()
         info = self._get_info()
-        return observations, rewards, done, info
+        return observation, rewards, done, info
 
     def _opponent_step(self):
         if self.built_in_opponent == "random":
@@ -174,20 +180,34 @@ class TicTacToe(BaseDiscreteActionEnv):
             "draw": winner == -1,
         }
 
-    def get_losing_state(self):
+    def get_losing_state(self, player_id: int=0):
         observation = self.render()
-        reward = -1
         done = True
-        info = {
-            "player_0_return": -1,
-            "player_1_return": 1,
-            "winner": 1,
-            "lose_for_wrong_format": 1,
-            "player_0_success": 0,
-            "player_1_success": 0,
-            "draw": 0,
-        }
-        return observation, reward, done, info
+        if player_id == 0:
+            reward = [-1, 1]
+            info = {
+                "player_0_return": -1,
+                "player_1_return": 1,
+                "winner": 1,
+                "lose_for_wrong_format": 1,
+                "player_0_success": False,
+                "player_1_success": True,
+                "draw": False,
+            }
+        else:
+            reward = [1, -1]
+            info = {
+                "player_0_return": 1,
+                "player_1_return": -1,
+                "winner": 0,
+                "lose_for_wrong_format": 1,
+                "player_0_success": True,
+                "player_1_success": False,
+                "draw": False,
+            }
+        if self.built_in_opponent == "none":
+            return observation, reward, done, info
+        return observation, reward[player_id], done, info
 
     def render(self, mode: str = "text"):
         if mode == "text":
