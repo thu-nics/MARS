@@ -216,28 +216,26 @@ class EnvManager:
         # update rollout cache
         self.rollout_cache["history"] = self._update_cache_history(
             self.rollout_cache["history"],
-            next_state=next_state,
-            legal_actions=entry["env"].get_all_actions(),
-            actions_left=entry["max_actions_per_traj"],
             num_actions_info=None,
+            next_state_entry={
+                "state": next_state,
+                "legal_actions": entry["env"].get_all_actions(),
+                "actions_left": entry["max_actions_per_traj"],
+            },
         )
         
-        # For self-play, also initialize both player histories
+        # For self-play, also initialize player 0 history
+        # Note: player 1 history is not initialized here, because the starting state is only for player 0
         if is_self_play:
             self.rollout_cache["player_0_history"] = self._update_cache_history(
                 self.rollout_cache["player_0_history"],
-                next_state=next_state,
-                legal_actions=entry["env"].get_all_actions(),
-                actions_left=entry["max_actions_per_traj"] // 2 + 1,    # assuming equal split of actions
                 num_actions_info=None,
-            )
-            self.rollout_cache["player_1_history"] = self._update_cache_history(
-                self.rollout_cache["player_1_history"],
-                next_state=next_state,
-                legal_actions=entry["env"].get_all_actions(),
-                actions_left=entry["max_actions_per_traj"] // 2 + 1,
-                num_actions_info=None,
-            )
+                next_state_entry={
+                    "state": next_state,
+                    "legal_actions": entry["env"].get_all_actions(),
+                    "actions_left": entry["max_actions_per_traj"],    # assuming equal split of actions
+                },
+            ) 
         
         self.episode_id += 1
         return self.rollout_cache
@@ -276,73 +274,41 @@ class EnvManager:
         if lose_for_wrong_format:
             _, acc_reward, turn_done, turn_info = entry["env"].get_losing_state(current_player)
             executed_actions = []
+            format_reward = min(self.worker_config.format_penalty, 0)
         else:
             execute_result = self._execute_actions(entry["env"], valid_actions[:actions_left_before])
             acc_reward, turn_info, turn_done, executed_actions = execute_result
-            # For self-play mode, handle list reward appropriately
-            if is_self_play and isinstance(acc_reward, (list, tuple)):
-                # In self-play mode, get reward for the current LLM player
-                acc_reward = acc_reward[current_player]
-            # TODO: currently setting as a format reward, should be able to handle both reward and penalty
-            acc_reward += self.worker_config.format_penalty
+            format_reward = max(self.worker_config.format_penalty, 0)
 
-        acc_reward += self.compute_length_penalty(env_input["token_length"])
-
-        # Update main history (for compatibility with single-agent mode)
-        status, history = self._log_env_state(
-            entry["status"],
-            self.rollout_cache["history"],
+        acc_reward[current_player] += format_reward
+        acc_reward[current_player] += self.compute_length_penalty(env_input["token_length"])
+        
+        # log the processed env state
+        self._log_env_state(
             entry["env"].render(),
             entry["env"].get_all_actions(),
             entry["max_actions_per_traj"],
             executed_actions,
-            valid_actions,
             acc_reward,
             turn_done,
             turn_info,
             env_input,
         )
-        
-        # For self-play, also update player-specific histories
-        if is_self_play:
-            player_history_key = f"player_{current_player}_history"
-            
-            # Update the specific player's history
-            _, player_history = self._log_env_state(
-                entry["status"],
-                self.rollout_cache[player_history_key],
-                entry["env"].render(),
-                entry["env"].get_all_actions(),
-                entry["max_actions_per_traj"],
-                executed_actions,
-                valid_actions,
-                acc_reward,
-                turn_done,
-                turn_info,
-                env_input,
-            )
-            self.rollout_cache[player_history_key] = player_history
-            
-            # Switch to next player for next turn if game is not done
-            if not turn_done:
-                self.rollout_cache["current_player"] = 1 - current_player
-        
-        status.step += 1
-        entry["status"] = status
 
+        if is_self_play and not turn_done:
+            self.rollout_cache["current_player"] = 1 - current_player
+
+        # check if the episode is done due to max steps
         max_steps_per_traj = entry.get("max_steps_per_traj", entry["max_actions_per_traj"])
-        if status.step >= max_steps_per_traj and not turn_done:
+        if entry["status"].step >= max_steps_per_traj and not turn_done:
             entry["status"].truncated = True
             entry["status"].terminated = True
-
-        self.rollout_cache["history"] = history
 
         if self.mode == "val":
             frame = entry["env"].render(mode="rgb_array")
             if isinstance(frame, np.ndarray):
                 self.rollout_cache["frames"].append(frame)
-
-        return status
+        return entry["status"]
 
     def generate(self, env_output: Dict):
         lm_input: DataProto = self.get_lm_input(env_output, prepare_for_update=False)
@@ -433,10 +399,12 @@ class EnvManager:
         self.process_input_queue_thread.join()
 
     def get_lm_input(self, env_output, prepare_for_update: bool) -> DataProto:
-        """"""
         llm_input_texts, messages_list = self._format_messages(
-            env_output=env_output, prepare_for_update=prepare_for_update, use_raw_llm_response=False
+            prepare_for_update=prepare_for_update,
+            use_raw_llm_response=False,
+            player_id=env_output["current_player"],
         )
+        print(f"player_id: {env_output['current_player']}, lm_input_texts: {llm_input_texts}")
         inputs = self.tokenizer(
             llm_input_texts, return_tensors="pt", padding=True, padding_side="left", truncation=False
         )  # do not truncate here. Process later at TODO
@@ -501,38 +469,34 @@ class EnvManager:
             For single-agent mode: Single DataProto object (for backward compatibility)
             For self-play mode: List of DataProto objects (one for each player)
         """
+        print("env_status: ", self.env_entry["status"])
+        print("rollout cache: ", self.rollout_cache)
         is_self_play = self.rollout_cache["is_self_play"]
-        
         if is_self_play:
-            # Generate trajectories for both players
-            rollouts = []
-            for player_id in [0, 1]:
-                player_rollout = self._formulate_single_rollout(player_id)
-                rollouts.append(player_rollout)
+            # Self-play mode - return trajectories for both players
+            rollouts =[]
+            if len(self.rollout_cache["player_0_history"]) > 0:
+                rollouts.append(self._formulate_single_rollout(player_id=0))
+            if len(self.rollout_cache["player_1_history"]) > 0:
+                rollouts.append(self._formulate_single_rollout(player_id=1))
+            print("len(rollouts): ", len(rollouts))
             return rollouts
         else:
-            # Single agent mode - return single rollout for backward compatibility
+            # Single agent mode - return single rollout
             return [self._formulate_single_rollout()]
 
     def _formulate_single_rollout(self, player_id=None):
         """Generate a single rollout trajectory, optionally for a specific player in self-play mode"""
         is_self_play = self.rollout_cache["is_self_play"]
-        
-        # Choose which history to use
         if is_self_play and player_id is not None:
             history_key = f"player_{player_id}_history"
-            rollout_history = self.rollout_cache[history_key]
-            # Create a modified rollout cache for this player
-            player_rollout_cache = self.rollout_cache.copy()
-            player_rollout_cache["history"] = rollout_history
-            # Add player identifier for trajectory grouping
-            player_rollout_cache["player_id"] = player_id
         else:
-            player_rollout_cache = self.rollout_cache
+            history_key = "history"
             
-        # print("rollout cache: ", player_rollout_cache)
         llm_input_texts, messages_list = self._format_messages(
-            env_output=player_rollout_cache, prepare_for_update=True, use_raw_llm_response=False
+            prepare_for_update=True, 
+            use_raw_llm_response=False, 
+            player_id=player_id,
         )
         # print("llm_input_texts: ", llm_input_texts)
         # print("messages_list: ", messages_list)
@@ -551,9 +515,10 @@ class EnvManager:
             },
             batch_size=input_ids.shape[0],
         )
-        scores = [[i["reward"] for i in player_rollout_cache["history"]]]
+        scores = [[i["reward"] for i in self.rollout_cache[history_key]]]
+        print("scores: ", scores)
         episode_scores = [sum(i) for i in scores]
-        penalty = player_rollout_cache["penalty"]
+        penalty = self.rollout_cache["penalty"]
 
         non_prompt_mask, score_tensor, response_mask = get_masks_and_scores(
             input_ids, self.tokenizer, scores, use_turn_scores=self.pipeline_config.use_turn_scores
@@ -581,8 +546,8 @@ class EnvManager:
         )
         
         # Create trajectory group ID that includes player info for self-play
-        env_id = player_rollout_cache["env_id"]
-        group_id = player_rollout_cache["group_id"]
+        env_id = self.rollout_cache["env_id"]
+        group_id = self.rollout_cache["group_id"]
         if is_self_play and player_id is not None:
             # Add player suffix to differentiate trajectories
             env_id = f"{env_id}_p{player_id}"
@@ -593,8 +558,8 @@ class EnvManager:
                 "env_ids": np.array([env_id], dtype=object),
                 "group_ids": np.array([group_id], dtype=object),
                 "messages_list": np.array(messages_list, dtype=object),
-                "tags": np.array([player_rollout_cache["tag"]], dtype=object),
-                "frames": np.array([player_rollout_cache["frames"]], dtype=object),
+                "tags": np.array([self.rollout_cache["tag"]], dtype=object),
+                "frames": np.array([self.rollout_cache["frames"]], dtype=object),
             }
         )
         # pad to response length
@@ -614,7 +579,9 @@ class EnvManager:
         llm_inputs.batch["scores"] = score_tensor
         # for llm raw response
         llm_raw_text_list, _ = self._format_messages(
-            env_output=player_rollout_cache, prepare_for_update=True, use_raw_llm_response=True
+            prepare_for_update=True, 
+            use_raw_llm_response=True,
+            player_id=player_id,
         )
         # print("llm_raw_text_list: ", llm_raw_text_list)
         llm_inputs.non_tensor_batch["turn_scores"] = np.array(scores, dtype=object)
@@ -627,9 +594,10 @@ class EnvManager:
             "success": float(status.terminated and (not status.truncated)),
             "num_actions": status.num_actions,
         }
+        
+        # Calculate metrics
         custom_metric = {}
-
-        for turn in player_rollout_cache["history"]:
+        for turn in self.rollout_cache[history_key]:
             for k, v in turn.get("info", {}).items():
                 if k == "success":
                     env_metric[k] = float(v)
@@ -642,12 +610,12 @@ class EnvManager:
             # env_metric[k] = np.sum(v) / len(player_rollout_cache['history'])
             env_metric[k] = np.sum(v)
 
-        if len(player_rollout_cache["history"]) > 0:
-            player_rollout_cache["history"][-1]["metrics"] = custom_metric
+        if len(self.rollout_cache[history_key]) > 0:
+            self.rollout_cache[history_key][-1]["metrics"] = custom_metric
 
         env_metric = {f"env/{entry['tag']}/{k}": v for k, v in env_metric.items()}
         env_metric["env/response_length"] = response_length
-        player_rollout_cache["metrics"] = env_metric
+        self.rollout_cache["metrics"] = env_metric
         llm_inputs.meta_info = {"metrics": env_metric}
         return llm_inputs
 
@@ -663,20 +631,22 @@ class EnvManager:
         return results
 
     def _update_cache_history(
-        self, history: List[Dict], next_state, legal_actions, actions_left, num_actions_info: Optional[Dict] = None
+        self, history: List[Dict], num_actions_info: Optional[Dict] = None, next_state_entry: Optional[Dict] = None
     ):
         """
         Update last step info and append state to history
         """
         if num_actions_info is not None:  # update last step info
             assert len(history), "History should not be empty"
-            history[-1].update(num_actions_info)
-
-        entry = {}  # append state to history
-        entry["state"] = next_state
-        entry["actions_left"] = actions_left
-        entry["legal_actions"] = legal_actions
-        history.append(entry)
+            num_actions_info = num_actions_info.copy()
+            for k, v in num_actions_info.items():
+                if k == "reward" and k in history[-1]:
+                    history[-1][k] += v
+                else:
+                    history[-1][k] = v
+        if next_state_entry is not None:
+            next_state_entry = next_state_entry.copy()
+            history.append(next_state_entry)
         return history
 
     def _extract_map_valid_actions(self, entry: Dict, actions: List[str]):
@@ -700,12 +670,14 @@ class EnvManager:
         return mapped_actions, lose_for_wrong_format
 
     def _execute_actions(self, env, actions):
-        acc_reward, turn_info, turn_done = 0, {}, False
+        acc_reward, turn_info, turn_done = [], {}, False
         executed_actions = []
         for action in actions:
             with self.thread_lock:
                 _, reward, done, info = env.step(action)
-            acc_reward += reward
+            if not acc_reward:
+                acc_reward = [0] * len(reward)
+            acc_reward = [acc_reward[i] + reward[i] for i in range(len(acc_reward))]
             turn_info.update(info)  # NOTE: currently use last info for multi-action
             executed_actions.append(action)
             if done:
@@ -715,81 +687,114 @@ class EnvManager:
 
     def _log_env_state(
         self,
-        status,
-        history,
         cur_obs,
         legal_actions,
         max_actions_per_traj,
         executed_actions,
-        all_actions,
         acc_reward,
         turn_done,
         turn_info,
         env_input,
-    ) -> Tuple[EnvStatus, List[Dict]]:
-        obs = self._handle_mm_state(cur_obs)
-        status.num_actions += len(executed_actions)
-        status.rewards.append(acc_reward)
-        actions_left = max_actions_per_traj - status.num_actions
+    ):
+        # Update status
+        self.env_entry["status"].step += 1
+        self.env_entry["status"].num_actions += len(executed_actions)
+        self.env_entry["status"].rewards.append(acc_reward)
         if turn_done:
-            status.terminated = True
-            status.truncated = not turn_info.get("success", False)
-        history = self._update_cache_history(
-            history,
-            next_state=obs,
-            legal_actions=legal_actions,
-            actions_left=actions_left,
-            num_actions_info={
-                "actions": executed_actions,
-                "reward": acc_reward,
-                "info": turn_info,
-                "llm_response": env_input["llm_response"],
-                "llm_raw_response": env_input["llm_raw_response"],
-            },
-        )
-        return status, history
+            self.env_entry["status"].terminated = True
+            self.env_entry["status"].truncated = not turn_info.get("success", False)
+        
+        # Update history
+        obs = self._handle_mm_state(cur_obs)
+        actions_left = max_actions_per_traj - self.env_entry["status"].num_actions
+        current_player = self.rollout_cache["current_player"]
+        num_actions_info = {
+            "actions": executed_actions,
+            "reward": acc_reward[current_player],
+            "info": turn_info,
+            "llm_response": env_input["llm_response"],
+            "llm_raw_response": env_input["llm_raw_response"],
+        }
+        next_state_entry = {
+            "state": obs,
+            "legal_actions": legal_actions,
+            "actions_left": actions_left,
+        }
+        
+        # For single-agent mode, update main history
+        if not self.rollout_cache["is_self_play"]:
+            self.rollout_cache["history"] = self._update_cache_history(
+                self.rollout_cache["history"],
+                num_actions_info=num_actions_info,
+                next_state_entry=next_state_entry,
+            )
+        # For self-play mode, update main history and player-specific histories
+        # Note: main history only contains the states; the actions and rewards are stored in player-specific histories
+        else:
+            self._update_cache_history(
+                self.rollout_cache["history"],
+                num_actions_info=None,
+                next_state_entry=next_state_entry,
+            )
+            self._update_cache_history(
+                self.rollout_cache[f"player_{current_player}_history"],
+                num_actions_info=num_actions_info,
+                next_state_entry=None,
+            )
+            if len(self.rollout_cache[f"player_{1 - current_player}_history"]) > 0:
+                self._update_cache_history(
+                    self.rollout_cache[f"player_{1 - current_player}_history"],
+                    num_actions_info={
+                        "reward": acc_reward[1 - current_player],
+                        "info": turn_info,
+                    },
+                    next_state_entry=None,
+                )
+            if not turn_done:
+                self._update_cache_history(
+                    self.rollout_cache[f"player_{1 - current_player}_history"],
+                    num_actions_info=None,
+                    next_state_entry=next_state_entry,
+                )
 
-    def _format_messages(self, env_output: Dict, prepare_for_update: bool, use_raw_llm_response: bool):
-        if "state" in env_output["history"][-1] and (not use_raw_llm_response and prepare_for_update):
+    def _format_messages(self, prepare_for_update: bool, use_raw_llm_response: bool, player_id: int = 0):
+        is_self_play = self.rollout_cache["is_self_play"]
+        if is_self_play:
+            history_key = f"player_{player_id}_history"
+        else:
+            history_key = "history"
+
+        if (
+            "state" in self.rollout_cache[history_key][-1] and 
+            (not use_raw_llm_response and prepare_for_update) and 
+            "reward" not in self.rollout_cache[history_key][-1]
+        ):
             # when prepare for update, we do not add the state from the n+1 turn to the trajectory
             # print(f"removing last state from history: {env_output['history'][-1]}")
-            env_output["history"] = env_output["history"][:-1]
+            self.rollout_cache[history_key] = self.rollout_cache[history_key][:-1]
 
+        prefix_prompt = self.env_entry["env"].get_prompt(
+            mode="prefix", 
+            think=self.pipeline_config.enable_think,
+            player_id=player_id,
+        )
         messages = [
-            {
-                "role": "system",
-                "content": self.env_entry["env"].get_prompt(mode="prefix", think=self.pipeline_config.enable_think)[
-                    "system"
-                ],
-            },
-            {
-                "role": "user",
-                "content": self.env_entry["env"].get_prompt(mode="prefix", think=self.pipeline_config.enable_think)[
-                    "user"
-                ],
-            },
+            {"role": "system", "content": prefix_prompt["system"]},
+            {"role": "user", "content": prefix_prompt["user"]},
         ]
 
-        for idx, content in enumerate(env_output["history"]):
+        for idx, content in enumerate(self.rollout_cache[history_key]):
             if messages[-1]["role"] != "user":
                 # ensure the last message is user message.
                 messages.append({"role": "user", "content": ""})
 
-            # For self-play mode, adjust turn indexing based on current player
-            if self.rollout_cache["is_self_play"]:
-                # In self-play mode, both players are LLMs, so turn numbering should reflect actual turns
-                turn_idx_content = (
-                    f"Information of Turn-{idx + 1}:\n\n"
-                    "This is your turn. The game state and legal actions for this turn are provided below. "
-                    "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
-                )
-            else:
-                # Original logic for single-agent mode against built-in opponent
-                turn_idx_content = (
-                    f"Information of Turn-{idx * 2 + 1}:\n\n"
-                    "This is your turn. The game state and legal actions for this turn are provided below. "
-                    "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
-                )
+            # Original logic for single-agent mode against built-in opponent
+            turn_idx = idx * 2 + 2 if is_self_play and player_id == 1 else idx * 2 + 1
+            turn_idx_content = (
+                f"Information of Turn-{turn_idx}:\n\n"
+                "This is your turn. The game state and legal actions for this turn are provided below. "
+                "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
+            )
             messages[-1]["content"] += turn_idx_content
             if "state" in content:
                 messages[-1]["content"] += (
@@ -804,7 +809,7 @@ class EnvManager:
                         "content": content["llm_raw_response"],
                     }
                 )
-            if "reward" in content and not (prepare_for_update and idx == len(env_output["history"]) - 1):
+            if "reward" in content and not (prepare_for_update and idx == len(self.rollout_cache[history_key]) - 1):
                 # when prepare for update, we do not add the reward from the n+1 turn to the trajectory
                 # reward_content = f"Reward:\n{content['reward']}\n"
                 reward_content = ""

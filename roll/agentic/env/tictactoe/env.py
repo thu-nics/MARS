@@ -60,20 +60,13 @@ class TicTacToe(BaseDiscreteActionEnv):
             return self.reset(next_seed)
 
     def step(self, action):
-        observation, reward, done, info = self._step(action)
+        observation, rewards, done, info = self._step(action)
         # If chose to play with built-in opponent, we need to let the opponent take action
         if self.built_in_opponent != "none" and not done:
             opponent_action = self._opponent_step()
-            observation, reward, done, info = self._step(opponent_action)
-        
-        # For self-play mode (built_in_opponent == "none"), return rewards for both players
-        # For backward compatibility with single agent, return reward[0]/reward[1] for single agent
-        if self.built_in_opponent == "none":
-            return observation, reward, done, info
-        elif not self.opponent_first_move:
-            return observation, reward[0], done, info
-        else:
-            return observation, reward[1], done, info
+            observation, _rewards, done, info = self._step(opponent_action)
+            rewards = [rewards[i] + _rewards[i] for i in range(2)]
+        return observation, rewards, done, info
 
     def _step(self, action):
         if isinstance(action, str):
@@ -98,14 +91,14 @@ class TicTacToe(BaseDiscreteActionEnv):
         # print(f"Built-in {self.built_in_opponent} opponent taking action: {self._action_to_string(self.current_player, action)}")
         return action
 
-    def get_prompt(self, mode="prefix", think=True):
+    def get_prompt(self, mode="prefix", think=True, player_id=0):
         if mode == "prefix":
-            prefix_prompt = self._get_prefix_prompt(think)
+            prefix_prompt = self._get_prefix_prompt(think, player_id)
             return prefix_prompt
         else:
             raise ValueError(f"Invalid prompt mode: {mode}")
 
-    def _get_prefix_prompt(self, think=True):
+    def _get_prefix_prompt(self, think=True, player_id=0):
         system_prompt = "You are an AI agent that makes optimal decisions to win in the game of tic-tac-toe."
         rules = (
             "1. Tic-tac-toe is a two-player board game played on a three-by-three grid. "
@@ -114,7 +107,7 @@ class TicTacToe(BaseDiscreteActionEnv):
             "3. The player who first places three of their marks in a horizontal, vertical, or diagonal line wins.\n"
             "4. If all cells are filled and no player wins, the game ends in a draw."
         )
-        mark = "O" if self.current_player == 1 else "X"
+        mark = "O" if player_id == 1 else "X"
         opponent_mark = "O" if mark == "X" else "X"
         information = (
             f"1. Your mark is {mark}. You are competing with another player controlling the mark {opponent_mark}.\n"
@@ -174,7 +167,8 @@ class TicTacToe(BaseDiscreteActionEnv):
             "player_0_return": returns[0],
             "player_1_return": returns[1],
             "winner": winner,
-            "lose_for_wrong_format": 0,
+            "player_0_lose_for_wrong_format": 0,
+            "player_1_lose_for_wrong_format": 0,
             "player_0_success": winner == 0,
             "player_1_success": winner == 1,
             "draw": winner == -1,
@@ -189,7 +183,8 @@ class TicTacToe(BaseDiscreteActionEnv):
                 "player_0_return": -1,
                 "player_1_return": 1,
                 "winner": 1,
-                "lose_for_wrong_format": 1,
+                "player_0_lose_for_wrong_format": 1,
+                "player_1_lose_for_wrong_format": 0,
                 "player_0_success": False,
                 "player_1_success": True,
                 "draw": False,
@@ -200,14 +195,13 @@ class TicTacToe(BaseDiscreteActionEnv):
                 "player_0_return": 1,
                 "player_1_return": -1,
                 "winner": 0,
-                "lose_for_wrong_format": 1,
+                "player_0_lose_for_wrong_format": 0,
+                "player_1_lose_for_wrong_format": 1,
                 "player_0_success": True,
                 "player_1_success": False,
                 "draw": False,
             }
-        if self.built_in_opponent == "none":
-            return observation, reward, done, info
-        return observation, reward[player_id], done, info
+        return observation, reward, done, info
 
     def render(self, mode: str = "text"):
         if mode == "text":
