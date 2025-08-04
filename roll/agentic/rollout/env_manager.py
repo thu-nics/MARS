@@ -153,6 +153,10 @@ class EnvManager:
             "use_thread_lock", True
         )  # 避免同时执行大量cpu操作, 可以通过env_config配置
         self.thread_lock = thread_lock if self.use_thread_lock else nullcontext()
+        
+        # 新增：保护EnvManager内部状态的锁
+        from threading import Lock
+        self.internal_lock = Lock()
 
         self.env_entry = copy.deepcopy(self.env_config)
         self.env_entry["env"] = REGISTERED_ENVS[self.env_entry["env_class"]](self.env_entry["config"])
@@ -188,22 +192,24 @@ class EnvManager:
         is_self_play = entry["env"].built_in_opponent == "none"
         current_player = 1 if entry["env"].opponent_first_move else 0   # Fix current player if not self-play
         
-        self.rollout_cache = {
-            "env_id": entry["env_id"],
-            "history": [],
-            "group_id": entry["group_id"],
-            "tag": entry["tag"],
-            "penalty": 0,
-            "frames": [],
-            "is_self_play": is_self_play,
-            "current_player": current_player,
-        }
-        
-        # For self-play, maintain separate histories for both players
-        if is_self_play:
-            self.rollout_cache["player_0_history"] = []  # e.g. X player in tic-tac-toe
-            self.rollout_cache["player_1_history"] = []  # e.g. O player in tic-tac-toe
-            self.rollout_cache["current_player"] = 0  # Track whose turn it is
+        # 使用内部锁保护rollout_cache的初始化
+        with self.internal_lock:
+            self.rollout_cache = {
+                "env_id": entry["env_id"],
+                "history": [],
+                "group_id": entry["group_id"],
+                "tag": entry["tag"],
+                "penalty": 0,
+                "frames": [],
+                "is_self_play": is_self_play,
+                "current_player": current_player,
+            }
+            
+            # For self-play, maintain separate histories for both players
+            if is_self_play:
+                self.rollout_cache["player_0_history"] = []  # e.g. X player in tic-tac-toe
+                self.rollout_cache["player_1_history"] = []  # e.g. O player in tic-tac-toe
+                self.rollout_cache["current_player"] = 0  # Track whose turn it is
 
         seed = self.group_seed + self.episode_id
 
@@ -295,8 +301,10 @@ class EnvManager:
             env_input,
         )
 
+        # 保护玩家切换操作
         if is_self_play and not turn_done:
-            self.rollout_cache["current_player"] = 1 - current_player
+            with self.internal_lock:
+                self.rollout_cache["current_player"] = 1 - current_player
 
         # check if the episode is done due to max steps
         max_steps_per_traj = entry.get("max_steps_per_traj", entry["max_actions_per_traj"])
@@ -471,27 +479,26 @@ class EnvManager:
         """
         print("env_status: ", self.env_entry["status"])
         print("rollout cache: ", self.rollout_cache)
-        is_self_play = self.rollout_cache["is_self_play"]
-        if is_self_play:
-            # Self-play mode - return trajectories for both players
-            rollouts =[]
-            if len(self.rollout_cache["player_0_history"]) > 0:
-                rollouts.append(self._formulate_single_rollout(player_id=0))
-            if len(self.rollout_cache["player_1_history"]) > 0:
-                rollouts.append(self._formulate_single_rollout(player_id=1))
-            print("len(rollouts): ", len(rollouts))
-            return rollouts
-        else:
-            # Single agent mode - return single rollout
-            return [self._formulate_single_rollout()]
+        
+        # 保护rollout_cache的读取
+        with self.internal_lock:
+            if self.rollout_cache["is_self_play"]:
+                # Self-play mode - return trajectories for both players
+                rollouts =[]
+                if len(self.rollout_cache["player_0_history"]) > 0:
+                    rollouts.append(self._formulate_single_rollout(player_id=0))
+                if len(self.rollout_cache["player_1_history"]) > 0:
+                    rollouts.append(self._formulate_single_rollout(player_id=1))
+                print("len(rollouts): ", len(rollouts))
+                return rollouts
+            else:
+                # Single agent mode - return single rollout
+                return [self._formulate_single_rollout()]
 
-    def _formulate_single_rollout(self, player_id=None):
+    def _formulate_single_rollout(self, player_id=0):
         """Generate a single rollout trajectory, optionally for a specific player in self-play mode"""
         is_self_play = self.rollout_cache["is_self_play"]
-        if is_self_play and player_id is not None:
-            history_key = f"player_{player_id}_history"
-        else:
-            history_key = "history"
+        history_key = self._get_history_key(player_id, is_self_play)
             
         llm_input_texts, messages_list = self._format_messages(
             prepare_for_update=True, 
@@ -630,6 +637,26 @@ class EnvManager:
         results = [PIL.Image.fromarray(_state, mode="RGB") for _state in state]
         return results
 
+    def _get_history_key(self, player_id: int, is_self_play: bool = None) -> str:
+        """Generate history key for a specific player"""
+        if is_self_play is None:
+            is_self_play = self.rollout_cache.get("is_self_play", False)
+        return f"player_{player_id}_history" if is_self_play else "history"
+    
+    def _update_player_history(self, player_id: int = None, num_actions_info=None, next_state_entry=None):
+        """Update history for a specific player, with thread safety"""
+        if player_id is None:
+            # Special case: update main history in self-play mode
+            history_key = "history"
+        else:
+            history_key = self._get_history_key(player_id, self.rollout_cache["is_self_play"])
+        
+        self._update_cache_history(
+            self.rollout_cache[history_key],
+            num_actions_info=num_actions_info,
+            next_state_entry=next_state_entry,
+        )
+
     def _update_cache_history(
         self, history: List[Dict], num_actions_info: Optional[Dict] = None, next_state_entry: Optional[Dict] = None
     ):
@@ -721,54 +748,33 @@ class EnvManager:
             "actions_left": actions_left,
         }
         
-        # For single-agent mode, update main history
-        if not self.rollout_cache["is_self_play"]:
-            self.rollout_cache["history"] = self._update_cache_history(
-                self.rollout_cache["history"],
-                num_actions_info=num_actions_info,
-                next_state_entry=next_state_entry,
-            )
-        # For self-play mode, update main history and player-specific histories
-        # Note: main history only contains the states; the actions and rewards are stored in player-specific histories
-        else:
-            self._update_cache_history(
-                self.rollout_cache["history"],
-                num_actions_info=None,
-                next_state_entry=next_state_entry,
-            )
-            self._update_cache_history(
-                self.rollout_cache[f"player_{current_player}_history"],
-                num_actions_info=num_actions_info,
-                next_state_entry=None,
-            )
-            if len(self.rollout_cache[f"player_{1 - current_player}_history"]) > 0:
-                self._update_cache_history(
-                    self.rollout_cache[f"player_{1 - current_player}_history"],
-                    num_actions_info={
-                        "reward": acc_reward[1 - current_player],
+        # 保护历史记录更新操作
+        with self.internal_lock:
+            if not self.rollout_cache["is_self_play"]:
+                # Single-agent mode: update main history
+                self._update_player_history(0, num_actions_info, next_state_entry)
+            else:
+                # Self-play mode: update main history and player-specific histories
+                self._update_player_history(None, None, next_state_entry)  # main history only gets state
+                self._update_player_history(current_player, num_actions_info, None)  # current player gets action/reward
+                
+                # Update opponent's history with reward and info
+                opponent_player = 1 - current_player
+                if len(self.rollout_cache[self._get_history_key(opponent_player)]) > 0:
+                    self._update_player_history(opponent_player, {
+                        "reward": acc_reward[opponent_player],
                         "info": turn_info,
-                    },
-                    next_state_entry=None,
-                )
-            if not turn_done:
-                self._update_cache_history(
-                    self.rollout_cache[f"player_{1 - current_player}_history"],
-                    num_actions_info=None,
-                    next_state_entry=next_state_entry,
-                )
+                    }, None)
+                
+                # If episode continues, give opponent the next state
+                if not turn_done:
+                    self._update_player_history(opponent_player, None, next_state_entry)
 
     def _format_messages(self, prepare_for_update: bool, use_raw_llm_response: bool, player_id: int = 0):
-        is_self_play = self.rollout_cache["is_self_play"]
-        if is_self_play:
-            history_key = f"player_{player_id}_history"
-        else:
-            history_key = "history"
+        is_self_play = self.rollout_cache["is_self_play"]  
+        history_key = self._get_history_key(player_id, is_self_play)
 
-        if (
-            "state" in self.rollout_cache[history_key][-1] and 
-            (not use_raw_llm_response and prepare_for_update) and 
-            "reward" not in self.rollout_cache[history_key][-1]
-        ):
+        if "reward" not in self.rollout_cache[history_key][-1] and (not use_raw_llm_response and prepare_for_update):
             # when prepare for update, we do not add the state from the n+1 turn to the trajectory
             # print(f"removing last state from history: {env_output['history'][-1]}")
             self.rollout_cache[history_key] = self.rollout_cache[history_key][:-1]
