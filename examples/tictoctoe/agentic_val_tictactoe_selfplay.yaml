@@ -36,7 +36,7 @@ tracker_kwargs:
 
 num_gpus_per_node: 8
 
-max_steps: 100
+max_steps: 256
 save_steps: 100
 logging_steps: 1
 eval_steps: 5
@@ -99,11 +99,11 @@ actor_infer:
     disable_gradient_checkpointing: true
     dtype: bf16
   generating_args:
-    max_new_tokens: 2048 # single-turn response length
+    max_new_tokens: 4096 # single-turn response length
     top_p: 0.99
     top_k: 100
     num_beams: 1
-    temperature: 0.5
+    temperature: 0.99
     num_return_sequences: 1
   data_args:
     template: qwen3
@@ -149,7 +149,7 @@ custom_envs:
     env_config:
       built_in_opponent: none  # Changed from "mcts" to "none" for self-play training
       render_mode: text
-  TicTacToeEval:
+  TicTacToeEval-first-move:
     env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
@@ -157,6 +157,16 @@ custom_envs:
     grid_vocab: false
     env_config:
       built_in_opponent: mcts  # Use MCTS opponent for evaluation
+      render_mode: text
+  TicTacToeEval-second-move:
+    env_type: tictactoe
+    max_actions_per_traj: ${max_actions_per_traj}
+    max_steps_per_traj: ${max_actions_per_traj}
+    max_tokens: 100
+    grid_vocab: false
+    env_config:
+      built_in_opponent: mcts  # Use MCTS opponent for evaluation
+      opponent_first_move: true
       render_mode: text
 
 train_env_manager:
@@ -172,6 +182,6 @@ val_env_manager:
   max_env_num_per_worker: 16
   env_groups: 512
   group_size: 1 # should be set to 1 because val temperature is set to 0 and same prompt leads to same output
-  tags: [TicTacToeEval]  # Use TicTacToeEval for evaluation with MCTS opponent
-  n_groups: [512] #
+  tags: [TicTacToeEval-first-move, TicTacToeEval-second-move]  # Use TicTacToeEval for evaluation with MCTS opponent
+  n_groups: [256, 256] #
 

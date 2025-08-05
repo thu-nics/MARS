@@ -185,7 +185,7 @@ class EnvManager:
             "coef": 1,
         }
 
-        print(f"Length reward scale: {self.length_reward_scale}")  # For debugging
+        # print(f"Length reward scale: {self.length_reward_scale}")  # For debugging
 
     def reset(self):
         entry = self.env_entry
@@ -371,6 +371,7 @@ class EnvManager:
 
         self.start_input_queue_process()
         self.running = True
+        self.num_states = [0, 0]  # Track state transitions for each player
         self.episode_id = 0
 
         self.group_seed = data.meta_info["seed"] + self.env_entry["group_seed"]
@@ -412,7 +413,7 @@ class EnvManager:
             use_raw_llm_response=False,
             player_id=env_output["current_player"],
         )
-        print(f"player_id: {env_output['current_player']}, lm_input_texts: {llm_input_texts}")
+        # print(f"player_id: {env_output['current_player']}, lm_input_texts: {llm_input_texts}")
         inputs = self.tokenizer(
             llm_input_texts, return_tensors="pt", padding=True, padding_side="left", truncation=False
         )  # do not truncate here. Process later at TODO
@@ -466,6 +467,28 @@ class EnvManager:
         }
         return env_input
 
+    def _should_include_player_data(self, player_id, balance_threshold=0.15):
+        """
+        Determine if we should include data from a specific player based on balance.
+        
+        Args:
+            player_id: The player ID (0 or 1)
+            balance_threshold: Maximum allowed imbalance ratio (default: 15%)
+            
+        Returns:
+            bool: True if we should include this player's data
+        """
+        total_states = sum(self.num_states)
+        if total_states == 0:
+            return True  # Always include data when starting
+            
+        # Calculate current ratio for this player
+        current_ratio = self.num_states[player_id] / total_states
+        target_ratio = 0.5  # Ideal 50-50 split
+        
+        # Allow inclusion if this player is underrepresented or within threshold
+        return current_ratio <= target_ratio + balance_threshold
+
     def formulate_rollouts(self):
         """
         1. 每个env的trajectory 应该是一个rollout
@@ -477,19 +500,33 @@ class EnvManager:
             For single-agent mode: Single DataProto object (for backward compatibility)
             For self-play mode: List of DataProto objects (one for each player)
         """
-        print("env_status: ", self.env_entry["status"])
-        print("rollout cache: ", self.rollout_cache)
+        # print("env_status: ", self.env_entry["status"])
+        # print("rollout cache: ", self.rollout_cache)
         
         # 保护rollout_cache的读取
         with self.internal_lock:
             if self.rollout_cache["is_self_play"]:
-                # Self-play mode - return trajectories for both players
-                rollouts =[]
-                if len(self.rollout_cache["player_0_history"]) > 0:
-                    rollouts.append(self._formulate_single_rollout(player_id=0))
-                if len(self.rollout_cache["player_1_history"]) > 0:
-                    rollouts.append(self._formulate_single_rollout(player_id=1))
-                print("len(rollouts): ", len(rollouts))
+                # Self-play mode - return trajectories for both players with balance control
+                rollouts = []
+                
+                # Use balance mechanism
+                for player_id in [0, 1]:
+                    history_key = self._get_history_key(player_id, True)
+                    if len(self.rollout_cache[history_key]) > 0 and self._should_include_player_data(player_id):
+                        rollouts.append(self._formulate_single_rollout(player_id=player_id))
+                        self.num_states[player_id] += len(self.rollout_cache[history_key])
+                
+                # Optional: Log balance information (uncomment for debugging)
+                # total_states = sum(self.num_states)
+                # balance_info = {
+                #     "total": total_states,
+                #     "player_0_ratio": self.num_states[0] / total_states if total_states > 0 else 0,
+                #     "player_1_ratio": self.num_states[1] / total_states if total_states > 0 else 0,
+                #     "player_0_count": self.num_states[0],
+                #     "player_1_count": self.num_states[1]
+                # }
+                # print(f"Balance info: {balance_info}")
+                
                 return rollouts
             else:
                 # Single agent mode - return single rollout
@@ -507,7 +544,7 @@ class EnvManager:
         )
         # print("llm_input_texts: ", llm_input_texts)
         # print("messages_list: ", messages_list)
-        print(f"is_self_play: {is_self_play}, player_id: {player_id}, messages_list: {messages_list}")
+        # print(f"is_self_play: {is_self_play}, player_id: {player_id}, messages_list: {messages_list}")
         inputs = self.tokenizer(
             llm_input_texts, return_tensors="pt", padding=True, padding_side="left", truncation=False
         )
@@ -523,7 +560,7 @@ class EnvManager:
             batch_size=input_ids.shape[0],
         )
         scores = [[i["reward"] for i in self.rollout_cache[history_key]]]
-        print("scores: ", scores)
+        # print("scores: ", scores)
         episode_scores = [sum(i) for i in scores]
         penalty = self.rollout_cache["penalty"]
 
@@ -795,9 +832,11 @@ class EnvManager:
                 messages.append({"role": "user", "content": ""})
 
             # Original logic for single-agent mode against built-in opponent
-            turn_idx = idx * 2 + 2 if is_self_play and player_id == 1 else idx * 2 + 1
+            # turn_idx = idx * 2 + 2 if is_self_play and player_id == 1 else idx * 2 + 1
+            # turn_idx = idx * 2 + 1
             turn_idx_content = (
-                f"Information of Turn-{turn_idx}:\n\n"
+                # f"Information of Turn-{turn_idx}:\n\n"
+                f"Information of your turn No.{idx}:\n\n"
                 "This is your turn. The game state and legal actions for this turn are provided below. "
                 "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
             )
