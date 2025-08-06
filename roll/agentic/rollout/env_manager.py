@@ -278,7 +278,8 @@ class EnvManager:
         current_player = self.rollout_cache['current_player']
         valid_actions, lose_for_wrong_format = self._extract_map_valid_actions(entry, env_input["actions"])
         if lose_for_wrong_format:
-            _, acc_reward, turn_done, turn_info = entry["env"].get_losing_state(current_player)
+            overlong_response = True if env_input["token_length"] > 4096 else False
+            _, acc_reward, turn_done, turn_info = entry["env"].get_losing_state(current_player, overlong_response)
             executed_actions = []
             format_reward = min(self.worker_config.format_penalty, 0)
         else:
@@ -569,8 +570,9 @@ class EnvManager:
         )
         non_prompt_mask = torch.logical_and(non_prompt_mask, attention_mask)
         response_mask = torch.logical_and(response_mask, attention_mask)
-
         response_length = response_mask.sum(dim=-1).float().mean().item()
+        response_length_per_turn = [i["token_length"] for i in self.rollout_cache[history_key]]
+
         input_ids = pad_to_length(
             input_ids, length=self.pipeline_config.sequence_length, pad_value=self.tokenizer.pad_token_id
         )
@@ -659,6 +661,18 @@ class EnvManager:
 
         env_metric = {f"env/{entry['tag']}/{k}": v for k, v in env_metric.items()}
         env_metric["env/response_length"] = response_length
+        
+        # Add per-turn response length metrics
+        env_metric[f"env/response_length_per_turn"] = np.mean(response_length_per_turn)
+        for turn_idx, turn_length in enumerate(response_length_per_turn):
+            env_metric[f"env/response_length_turn_{turn_idx}"] = turn_length
+        # Add player-specific response length metrics for self-play mode
+        else:
+            env_metric[f"env/response_length_player_{player_id}"] = response_length
+            # Also add per-turn metrics for each player
+            env_metric[f"env/response_length_per_turn_player_{player_id}"] = np.mean(response_length_per_turn)
+            for turn_idx, turn_length in enumerate(response_length_per_turn):
+                env_metric[f"env/response_length_player_{player_id}_turn_{turn_idx}"] = turn_length
         self.rollout_cache["metrics"] = env_metric
         llm_inputs.meta_info = {"metrics": env_metric}
         return llm_inputs
@@ -778,6 +792,7 @@ class EnvManager:
             "info": turn_info,
             "llm_response": env_input["llm_response"],
             "llm_raw_response": env_input["llm_raw_response"],
+            "token_length": env_input["token_length"],
         }
         next_state_entry = {
             "state": obs,

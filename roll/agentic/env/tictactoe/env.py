@@ -169,12 +169,14 @@ class TicTacToe(BaseDiscreteActionEnv):
             "winner": winner,
             "player_0_lose_for_wrong_format": 0,
             "player_1_lose_for_wrong_format": 0,
+            "player_0_lose_for_overlong_response": 0,
+            "player_1_lose_for_overlong_response": 0,
             "player_0_success": winner == 0,
             "player_1_success": winner == 1,
             "draw": winner == -1,
         }
 
-    def get_losing_state(self, player_id: int=0):
+    def get_losing_state(self, player_id: int=0, overlong_response: bool=False):
         observation = self.render()
         done = True
         if player_id == 0:
@@ -185,6 +187,8 @@ class TicTacToe(BaseDiscreteActionEnv):
                 "winner": 1,
                 "player_0_lose_for_wrong_format": 1,
                 "player_1_lose_for_wrong_format": 0,
+                "player_0_lose_for_overlong_response": 1 if overlong_response else 0,
+                "player_1_lose_for_overlong_response": 0,
                 "player_0_success": False,
                 "player_1_success": True,
                 "draw": False,
@@ -197,6 +201,8 @@ class TicTacToe(BaseDiscreteActionEnv):
                 "winner": 0,
                 "player_0_lose_for_wrong_format": 0,
                 "player_1_lose_for_wrong_format": 1,
+                "player_0_lose_for_overlong_response": 0,
+                "player_1_lose_for_overlong_response": 1 if overlong_response else 0,
                 "player_0_success": True,
                 "player_1_success": False,
                 "draw": False,
