@@ -20,6 +20,10 @@ logger = get_logger()
 class RewardNormalizationConfig:
     grouping: str = field(default="state", metadata={"help": "state / batch / inductive"})
     method: str = field(default="identity", metadata={"help": "asym_clip / identity / mean_std"})
+    separate_norm_for_selfplay: bool = field(
+        default=False, 
+        metadata={"help": "In self-play mode, normalize rewards separately for each player (True) or together (False)"}
+    )
 
 
 @dataclass

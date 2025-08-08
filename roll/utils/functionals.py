@@ -681,6 +681,89 @@ def score_normalize(x, rn_cfg, running_ctrl=None, mask=None) -> torch.Tensor:
 
 
 @torch.no_grad()
+def reward_normalize_by_player(data: "DataProto", rewards: torch.Tensor, rn_cfg, running_ctrl=None, mask=None):
+    """
+    Normalize rewards separately for each player in self-play scenarios.
+    
+    Args:
+        data: DataProto containing trajectory data with group_ids
+        rewards: reward tensor to be normalized
+        rn_cfg: reward normalization configuration
+        running_ctrl: running normalization controller(s) - can be single controller or dict with 'player_0'/'player_1' keys
+        mask: optional mask for the rewards
+        
+    Returns:
+        torch.Tensor: normalized rewards with same shape as input
+    """
+    # Extract player information from group_ids
+    group_ids = data.non_tensor_batch.get("group_ids", [])
+    if len(group_ids) == 0:
+        # Fall back to regular normalization if no group_ids available
+        return score_normalize(rewards, rn_cfg=rn_cfg, running_ctrl=running_ctrl, mask=mask)
+    
+    # Identify player indices
+    player_0_indices = []
+    player_1_indices = []
+    
+    for i, group_id in enumerate(group_ids):
+        if isinstance(group_id, str) and "_p" in group_id:
+            player_id = group_id.split("_p")[-1]
+            if player_id == "0":
+                player_0_indices.append(i)
+            elif player_id == "1":
+                player_1_indices.append(i)
+        else:
+            # If no player info, assign to player 0 by default
+            player_0_indices.append(i)
+    
+    # If we don't find any clear player separation, fall back to regular normalization
+    if len(player_0_indices) == 0 and len(player_1_indices) == 0:
+        return score_normalize(rewards, rn_cfg=rn_cfg, running_ctrl=running_ctrl, mask=mask)
+    
+    # Handle running_ctrl - can be single controller or dict with player-specific controllers
+    if isinstance(running_ctrl, dict):
+        player_0_ctrl = running_ctrl.get("player_0", None)
+        player_1_ctrl = running_ctrl.get("player_1", None)
+    else:
+        # Use the same controller for both players if not separated
+        player_0_ctrl = running_ctrl
+        player_1_ctrl = running_ctrl
+    
+    # Create a copy of rewards to modify
+    normalized_rewards = rewards.clone()
+    
+    # Normalize player 0's rewards if any exist
+    if len(player_0_indices) > 0:
+        player_0_indices_tensor = torch.tensor(player_0_indices, dtype=torch.long)
+        player_0_rewards = rewards[player_0_indices_tensor]
+        player_0_mask = mask[player_0_indices_tensor] if mask is not None else None
+        
+        player_0_normalized = score_normalize(
+            player_0_rewards, 
+            rn_cfg=rn_cfg, 
+            running_ctrl=player_0_ctrl, 
+            mask=player_0_mask
+        )
+        normalized_rewards[player_0_indices_tensor] = player_0_normalized
+    
+    # Normalize player 1's rewards if any exist
+    if len(player_1_indices) > 0:
+        player_1_indices_tensor = torch.tensor(player_1_indices, dtype=torch.long)
+        player_1_rewards = rewards[player_1_indices_tensor]
+        player_1_mask = mask[player_1_indices_tensor] if mask is not None else None
+        
+        player_1_normalized = score_normalize(
+            player_1_rewards, 
+            rn_cfg=rn_cfg, 
+            running_ctrl=player_1_ctrl, 
+            mask=player_1_mask
+        )
+        normalized_rewards[player_1_indices_tensor] = player_1_normalized
+    
+    return normalized_rewards
+
+
+@torch.no_grad()
 def reward_postprocess_agentic(data: "DataProto", pipeline_config: AgenticConfig, running_ctrl=None, kl_ctrl=None):
     # 0. get rewards (process token_level_rewards directly if use_turn_scores is True)
     if pipeline_config.use_turn_scores:
@@ -693,12 +776,22 @@ def reward_postprocess_agentic(data: "DataProto", pipeline_config: AgenticConfig
     metrics = {"critic/reward_clip_frac": 0.0}
 
     # 1. normalize (identity/mean/mean_std/asym_clip/running)
-    rewards = score_normalize(
-        rewards,
-        rn_cfg=pipeline_config.reward_normalization,
-        running_ctrl=running_ctrl,
-        mask=mask,
-    )
+    # Check if we should normalize players separately in self-play mode
+    if pipeline_config.reward_normalization.separate_norm_for_selfplay:
+        rewards = reward_normalize_by_player(
+            data=data,
+            rewards=rewards, 
+            rn_cfg=pipeline_config.reward_normalization,
+            running_ctrl=running_ctrl,
+            mask=mask
+        )
+    else:
+        rewards = score_normalize(
+            rewards,
+            rn_cfg=pipeline_config.reward_normalization,
+            running_ctrl=running_ctrl,
+            mask=mask,
+        )
 
     # 2. clip
     if pipeline_config.reward_clip:

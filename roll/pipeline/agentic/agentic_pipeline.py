@@ -204,7 +204,16 @@ class AgenticPipeline(BasePipeline):
                     for group_name, group_batch in batch_grouped.items():
                         # print(f"group_name: {group_name}")
                         if group_name not in self.running:
-                            self.running[group_name] = RunningMoments()
+                            # Initialize running controllers
+                            if self.pipeline_config.reward_normalization.separate_norm_for_selfplay:
+                                # Create separate controllers for each player in self-play mode
+                                self.running[group_name] = {
+                                    "player_0": RunningMoments(),
+                                    "player_1": RunningMoments()
+                                }
+                            else:
+                                # Use single controller for all trajectories
+                                self.running[group_name] = RunningMoments()
                         # 0. get rewards
                         with Timer(name="get_rewards", logger=None) as get_rewards_timer:
                             scores: torch.Tensor = group_batch.batch["scores"].clone()
