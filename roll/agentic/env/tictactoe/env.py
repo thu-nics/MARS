@@ -180,7 +180,7 @@ class TicTacToe(BaseDiscreteActionEnv):
         observation = self.render()
         done = True
         if player_id == 0:
-            reward = [-1, 1]
+            reward = [-1, 0]
             info = {
                 "player_0_return": -1,
                 "player_1_return": 1,
@@ -194,7 +194,7 @@ class TicTacToe(BaseDiscreteActionEnv):
                 "draw": False,
             }
         else:
-            reward = [1, -1]
+            reward = [0, -1]
             info = {
                 "player_0_return": 1,
                 "player_1_return": -1,

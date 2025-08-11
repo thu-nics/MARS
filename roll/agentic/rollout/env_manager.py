@@ -178,7 +178,7 @@ class EnvManager:
             self.processor.chat_template = template
 
         self.length_reward_scale = {
-            "upper": 0.1,
+            "upper": 0.0,
             "lower": 0.5,
             "min_len": 11,
             "max_len": 1024,
@@ -257,7 +257,6 @@ class EnvManager:
         reward = 0.0
         # penalize the length of the response
         reward = self.length_reward_scale["coef"] - (token_length - min_len) / (max_len - min_len)
-        reward = min(0, reward)  # we also don't want to reward shorter responses.
 
         if reward > 0:
             reward *= self.length_reward_scale["upper"]  # scale to make it comparable with the winning rewards
@@ -848,10 +847,10 @@ class EnvManager:
 
             # Original logic for single-agent mode against built-in opponent
             # turn_idx = idx * 2 + 2 if is_self_play and player_id == 1 else idx * 2 + 1
-            # turn_idx = idx * 2 + 1
+            turn_idx = idx * 2 + 1
             turn_idx_content = (
-                # f"Information of Turn-{turn_idx}:\n\n"
-                f"Information of your turn No.{idx}:\n\n"
+                f"Information of Turn-{turn_idx}:\n\n"
+                # f"Information of your turn No.{idx}:\n\n"
                 "This is your turn. The game state and legal actions for this turn are provided below. "
                 "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
             )
