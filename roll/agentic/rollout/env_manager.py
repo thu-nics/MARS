@@ -277,7 +277,7 @@ class EnvManager:
         current_player = self.rollout_cache['current_player']
         valid_actions, lose_for_wrong_format = self._extract_map_valid_actions(entry, env_input["actions"])
         if lose_for_wrong_format:
-            overlong_response = True if env_input["token_length"] > 4096 else False
+            overlong_response = True if env_input["token_length"] > 4090 else False
             _, acc_reward, turn_done, turn_info = entry["env"].get_losing_state(current_player, overlong_response)
             executed_actions = []
             format_reward = min(self.worker_config.format_penalty, 0)
@@ -530,7 +530,7 @@ class EnvManager:
                 return rollouts
             else:
                 # Single agent mode - return single rollout
-                return [self._formulate_single_rollout()]
+                return [self._formulate_single_rollout(player_id=self.rollout_cache["current_player"])]
 
     def _formulate_single_rollout(self, player_id=0):
         """Generate a single rollout trajectory, optionally for a specific player in self-play mode"""
@@ -666,7 +666,7 @@ class EnvManager:
         for turn_idx, turn_length in enumerate(response_length_per_turn):
             env_metric[f"env/response_length_turn_{turn_idx}"] = turn_length
         # Add player-specific response length metrics for self-play mode
-        else:
+        if is_self_play:
             env_metric[f"env/response_length_player_{player_id}"] = response_length
             # Also add per-turn metrics for each player
             env_metric[f"env/response_length_per_turn_player_{player_id}"] = np.mean(response_length_per_turn)
@@ -803,7 +803,7 @@ class EnvManager:
         with self.internal_lock:
             if not self.rollout_cache["is_self_play"]:
                 # Single-agent mode: update main history
-                self._update_player_history(0, num_actions_info, next_state_entry)
+                self._update_player_history(None, num_actions_info, next_state_entry)
             else:
                 # Self-play mode: update main history and player-specific histories
                 self._update_player_history(None, None, next_state_entry)  # main history only gets state
