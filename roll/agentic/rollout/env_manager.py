@@ -29,6 +29,29 @@ from roll.utils.logging import get_logger
 base agentic codes reference: https://github.com/RAGEN-AI/RAGEN/blob/main/ragen/llm_agent/es_manager.py
 """
 
+index_table = {
+    1: "first",
+    2: "second",
+    3: "third",
+    4: "fourth",
+    5: "fifth",
+    6: "sixth",
+    7: "seventh",
+    8: "eighth",
+    9: "ninth",
+    10: "tenth",
+    11: "eleventh",
+    12: "twelfth",
+    13: "thirteenth",
+    14: "fourteenth",
+    15: "fifteenth",
+    16: "sixteenth",
+    17: "seventeenth",
+    18: "eighteenth",
+    19: "nineteenth",
+    20: "twentieth",
+}
+
 
 @dataclass
 class EnvStatus:
@@ -185,7 +208,7 @@ class EnvManager:
             "coef": 1,
         }
 
-        # print(f"Length reward scale: {self.length_reward_scale}")  # For debugging
+        print(f"Length reward scale: {self.length_reward_scale}")  # For debugging
 
     def reset(self):
         entry = self.env_entry
@@ -467,7 +490,7 @@ class EnvManager:
         }
         return env_input
 
-    def _should_include_player_data(self, player_id, balance_threshold=0.15):
+    def _should_include_player_data(self, player_id, balance_threshold=0.05):
         """
         Determine if we should include data from a specific player based on balance.
         
@@ -513,26 +536,22 @@ class EnvManager:
                 for player_id in [0, 1]:
                     history_key = self._get_history_key(player_id, True)
                     if len(self.rollout_cache[history_key]) > 0 and self._should_include_player_data(player_id):
-                        rollouts.append(self._formulate_single_rollout(player_id=player_id))
+                        total_states = sum(self.num_states)
+                        balance_info = {
+                            "total": total_states,
+                            "player_0_ratio": self.num_states[0] / total_states if total_states > 0 else 0,
+                            "player_1_ratio": self.num_states[1] / total_states if total_states > 0 else 0,
+                            "player_0_count": self.num_states[0],
+                            "player_1_count": self.num_states[1]
+                        }
+                        rollouts.append(self._formulate_single_rollout(player_id=player_id, balance_info=balance_info))
                         self.num_states[player_id] += len(self.rollout_cache[history_key])
-                
-                # Optional: Log balance information (uncomment for debugging)
-                # total_states = sum(self.num_states)
-                # balance_info = {
-                #     "total": total_states,
-                #     "player_0_ratio": self.num_states[0] / total_states if total_states > 0 else 0,
-                #     "player_1_ratio": self.num_states[1] / total_states if total_states > 0 else 0,
-                #     "player_0_count": self.num_states[0],
-                #     "player_1_count": self.num_states[1]
-                # }
-                # print(f"Balance info: {balance_info}")
-                
                 return rollouts
             else:
                 # Single agent mode - return single rollout
                 return [self._formulate_single_rollout(player_id=self.rollout_cache["current_player"])]
 
-    def _formulate_single_rollout(self, player_id=0):
+    def _formulate_single_rollout(self, player_id=0, balance_info=None):
         """Generate a single rollout trajectory, optionally for a specific player in self-play mode"""
         is_self_play = self.rollout_cache["is_self_play"]
         history_key = self._get_history_key(player_id, is_self_play)
@@ -659,19 +678,22 @@ class EnvManager:
             self.rollout_cache[history_key][-1]["metrics"] = custom_metric
 
         env_metric = {f"env/{entry['tag']}/{k}": v for k, v in env_metric.items()}
-        env_metric["env/response_length"] = response_length
+        env_metric[f"env/{entry['tag']}/response_length"] = response_length
         
         # Add per-turn response length metrics
-        env_metric[f"env/response_length_per_turn"] = np.mean(response_length_per_turn)
+        env_metric[f"env/{entry['tag']}/response_length_per_turn"] = np.mean(response_length_per_turn)
         for turn_idx, turn_length in enumerate(response_length_per_turn):
-            env_metric[f"env/response_length_turn_{turn_idx}"] = turn_length
+            env_metric[f"env/{entry['tag']}/response_length_turn_{turn_idx}"] = turn_length
         # Add player-specific response length metrics for self-play mode
         if is_self_play:
-            env_metric[f"env/response_length_player_{player_id}"] = response_length
+            env_metric[f"env/{entry['tag']}/response_length_player_{player_id}"] = response_length
             # Also add per-turn metrics for each player
-            env_metric[f"env/response_length_per_turn_player_{player_id}"] = np.mean(response_length_per_turn)
+            env_metric[f"env/{entry['tag']}/response_length_per_turn_player_{player_id}"] = np.mean(response_length_per_turn)
             for turn_idx, turn_length in enumerate(response_length_per_turn):
-                env_metric[f"env/response_length_player_{player_id}_turn_{turn_idx}"] = turn_length
+                env_metric[f"env/{entry['tag']}/response_length_player_{player_id}_turn_{turn_idx}"] = turn_length
+        if balance_info is not None:
+            for k, v in balance_info.items():
+                env_metric[f"env/{entry['tag']}/{k}"] = v
         self.rollout_cache["metrics"] = env_metric
         llm_inputs.meta_info = {"metrics": env_metric}
         return llm_inputs
@@ -850,7 +872,7 @@ class EnvManager:
             turn_idx = idx * 2 + 1
             turn_idx_content = (
                 f"Information of Turn-{turn_idx}:\n\n"
-                # f"Information of your turn No.{idx}:\n\n"
+                # f"Information of your {index_table[idx + 1]} turn:\n\n"
                 "This is your turn. The game state and legal actions for this turn are provided below. "
                 "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
             )

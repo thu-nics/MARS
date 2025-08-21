@@ -127,6 +127,7 @@ class AgenticConfig(BaseConfig):
     lambd: float = field(default=0.95, metadata={"help": "Gamma parameter for advantage calculation"})
     gamma: float = field(default=1, metadata={"help": "Lambda parameter for advantage calculation"})
     pg_clip: Optional[float] = field(default=0.2, metadata={"help": "Range for clipping in PPO policy gradient loss"})
+    pg_clip_high: Optional[float] = field(default=0.28, metadata={"help": "Range for clipping in PPO policy gradient loss"})
     value_clip: Optional[float] = field(
         default=None, metadata={"help": "Range for clipping values in loss calculation"}
     )

@@ -284,7 +284,7 @@ class ActorWorker(Worker):
         )
 
         clipped_low = (ratio < 1 - self.pipeline_config.pg_clip).float()
-        clipped_high = (ratio > 1 + self.pipeline_config.pg_clip).float()
+        clipped_high = (ratio > 1 + self.pipeline_config.pg_clip_high).float()
         clipped = (clipped_low + clipped_high).float()
 
         entropy = self.strategy.op_compute_entropy(logits=output_tensor, attention_mask=data.batch["response_mask"])

@@ -36,7 +36,7 @@ tracker_kwargs:
 
 num_gpus_per_node: 8
 
-max_steps: 100
+max_steps: 256
 save_steps: 100
 logging_steps: 1
 eval_steps: 5
@@ -55,7 +55,7 @@ adv_estimator: "reinforce"
 #dual_clip_loss: True
 init_kl_coef: 0.0
 use_kl_loss: true
-kl_loss_coef: 0.05
+kl_loss_coef: 0.10
 
 whiten_advantages: true
 entropy_loss_coef: 0.01
@@ -99,7 +99,7 @@ actor_infer:
     disable_gradient_checkpointing: true
     dtype: bf16
   generating_args:
-    max_new_tokens: 2048 # single-turn response length
+    max_new_tokens: 4096 # single-turn response length
     top_p: 0.99
     top_k: 100
     num_beams: 1
@@ -136,11 +136,12 @@ enable_think: True # False -> no think RL
 max_actions_per_traj: 5
 reward_normalization:
   grouping: tags # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
-  method: mean_std # asym_clip / identity / mean_std
+  method: mean # asym_clip / identity / mean_std
 whiten_rewards: true
+loss_agg_mode: token-mean
 
 custom_envs:
-  TicTacToe:
+  TicTacToe-first-move:
     env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
@@ -149,6 +150,16 @@ custom_envs:
     env_config:
       built_in_opponent: mcts
       render_mode: text
+  TicTacToe-second-move:
+    env_type: tictactoe
+    max_actions_per_traj: ${max_actions_per_traj}
+    max_steps_per_traj: ${max_actions_per_traj}
+    max_tokens: 100
+    grid_vocab: false
+    env_config:
+      built_in_opponent: mcts
+      opponent_first_move: true
+      render_mode: text
 
 train_env_manager:
   format_penalty: 0.05 # sokoban env penalty_for_step=-0.1
@@ -156,13 +167,13 @@ train_env_manager:
   env_groups: 32
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
-  tags: [TicTacToe]
-  n_groups: [32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  tags: [TicTacToe-first-move, TicTacToe-second-move]
+  n_groups: [16, 16] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
 
 val_env_manager:
   max_env_num_per_worker: 16
   env_groups: 512
   group_size: 1 # should be set to 1 because val temperature is set to 0 and same prompt leads to same output
-  tags: [TicTacToe]
-  n_groups: [512] #
+  tags: [TicTacToe-first-move, TicTacToe-second-move]
+  n_groups: [256, 256] #
 

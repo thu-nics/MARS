@@ -97,7 +97,7 @@ custom_envs:
       num_boxes: 1
       max_steps: ${max_actions_per_traj}
       
-  TicTacToe:
+  TicTacToe-first-move:
     env_type: tictactoe
     max_actions_per_traj:  ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
@@ -107,11 +107,22 @@ custom_envs:
       built_in_opponent: none
       render_mode: text
 
+  TicTacToe-second-move:
+    env_type: tictactoe
+    max_actions_per_traj:  ${max_actions_per_traj}
+    max_steps_per_traj: ${max_actions_per_traj}
+    max_tokens: 100
+    grid_vocab: false
+    env_config:
+      built_in_opponent: none
+      opponent_first_move: true
+      render_mode: text
+
 train_env_manager:
   format_penalty: 0.05 # sokoban env penalty_for_step=-0.1
   max_env_num_per_worker: 64
   env_groups: 64
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
-  tags: [TicTacToe]
-  n_groups: [64] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  tags: [TicTacToe-first-move, TicTacToe-second-move]
+  n_groups: [32, 32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
