@@ -116,6 +116,10 @@ def get_masks_and_scores(
     # TODO: special tokens add to config
     reward_token = tokenizer.encode("<|im_end|>")[0]
     score_tensor = torch.zeros_like(input_ids, dtype=torch.float32)
+    
+    # 新增：记录每个turn结尾位置的变量
+    turn_end_positions = torch.zeros_like(input_ids, dtype=torch.bool)
+    
     if use_turn_scores:
         for idx, scores in enumerate(zip_longest(*all_scores, fillvalue=0)):
             scores = torch.tensor(scores, dtype=torch.float32)
@@ -123,12 +127,16 @@ def get_masks_and_scores(
             reward_position = (input_ids == reward_token) & (turn_indicators == turn_indicator)
             # Set the last token of the rows where all positions are False to True
             reward_position[~reward_position.any(dim=-1), -1] = True
+            # 记录当前turn的结尾位置
+            turn_end_positions = turn_end_positions | reward_position
             score_tensor[reward_position] = scores
     else:
         scores = [sum(i) for i in all_scores]
         score_tensor[:, -1] = torch.tensor(scores, dtype=torch.float32)
+        # 在非turn_scores模式下，所有turn的结尾位置都在序列末尾
+        turn_end_positions[:, -1] = True
 
-    return non_prompt_mask, score_tensor, response_mask
+    return non_prompt_mask, score_tensor, response_mask, turn_end_positions
 
 
 class EnvManager:
@@ -490,28 +498,6 @@ class EnvManager:
         }
         return env_input
 
-    def _should_include_player_data(self, player_id, balance_threshold=0.05):
-        """
-        Determine if we should include data from a specific player based on balance.
-        
-        Args:
-            player_id: The player ID (0 or 1)
-            balance_threshold: Maximum allowed imbalance ratio (default: 15%)
-            
-        Returns:
-            bool: True if we should include this player's data
-        """
-        total_states = sum(self.num_states)
-        if total_states == 0:
-            return True  # Always include data when starting
-            
-        # Calculate current ratio for this player
-        current_ratio = self.num_states[player_id] / total_states
-        target_ratio = 0.5  # Ideal 50-50 split
-        
-        # Allow inclusion if this player is underrepresented or within threshold
-        return current_ratio <= target_ratio + balance_threshold
-
     def formulate_rollouts(self):
         """
         1. 每个env的trajectory 应该是一个rollout
@@ -535,7 +521,7 @@ class EnvManager:
                 # Use balance mechanism
                 for player_id in [0, 1]:
                     history_key = self._get_history_key(player_id, True)
-                    if len(self.rollout_cache[history_key]) > 0 and self._should_include_player_data(player_id):
+                    if len(self.rollout_cache[history_key]) > 0:
                         total_states = sum(self.num_states)
                         balance_info = {
                             "total": total_states,
@@ -583,7 +569,7 @@ class EnvManager:
         episode_scores = [sum(i) for i in scores]
         penalty = self.rollout_cache["penalty"]
 
-        non_prompt_mask, score_tensor, response_mask = get_masks_and_scores(
+        non_prompt_mask, score_tensor, response_mask, turn_end_positions = get_masks_and_scores(
             input_ids, self.tokenizer, scores, use_turn_scores=self.pipeline_config.use_turn_scores
         )
         non_prompt_mask = torch.logical_and(non_prompt_mask, attention_mask)
@@ -599,6 +585,7 @@ class EnvManager:
         response_mask = pad_to_length(response_mask, length=self.pipeline_config.sequence_length, pad_value=0)
         non_prompt_mask = pad_to_length(non_prompt_mask, length=self.pipeline_config.sequence_length, pad_value=0)
         score_tensor = pad_to_length(score_tensor, length=self.pipeline_config.sequence_length, pad_value=0)
+        turn_end_positions = pad_to_length(turn_end_positions, length=self.pipeline_config.sequence_length, pad_value=0)
 
         llm_inputs.batch.update(
             {
@@ -641,6 +628,7 @@ class EnvManager:
         prompt_mask = arange < first_true_indices.unsqueeze(1)
         llm_inputs.batch["prompt_mask"] = prompt_mask
         llm_inputs.batch["scores"] = score_tensor
+        llm_inputs.batch["turn_end_positions"] = turn_end_positions
         # for llm raw response
         llm_raw_text_list, _ = self._format_messages(
             prepare_for_update=True, 

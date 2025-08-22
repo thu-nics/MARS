@@ -768,7 +768,8 @@ def reward_postprocess_agentic(data: "DataProto", pipeline_config: AgenticConfig
     # 0. get rewards (process token_level_rewards directly if use_turn_scores is True)
     if pipeline_config.use_turn_scores:
         rewards = data.batch["token_level_rewards"].clone().detach()
-        mask = torch.tensor(rewards != 0, dtype=rewards.dtype)
+        # mask = torch.tensor(rewards != 0, dtype=rewards.dtype)
+        mask = data.batch["turn_end_positions"]
     else:
         rewards = data.batch["response_level_rewards"].clone().detach()
         mask = None
