@@ -138,6 +138,36 @@ class AgenticPipeline(BasePipeline):
                     eval_metrics["score/min"] = torch.min(eval_score).detach().item()
                     metrics.update({f"val/{k}": v for k, v in eval_metrics.items()})
 
+                    # dump eval_batch
+                    prompt_mask = eval_batch.batch["prompt_mask"]
+                    non_prompt_mask = eval_batch.batch["non_prompt_mask"]
+                    input_ids = eval_batch.batch["input_ids"]
+                    prompt_ids = torch.where(
+                        prompt_mask.bool(), input_ids, torch.full_like(input_ids, self.tokenizer.pad_token_id)
+                    )
+                    response_ids = torch.where(
+                        non_prompt_mask.bool(), input_ids, torch.full_like(input_ids, self.tokenizer.pad_token_id)
+                    )
+
+                    generate_res = []
+                    prompts = self.tokenizer.batch_decode(prompt_ids, skip_special_tokens=True)
+                    responses = self.tokenizer.batch_decode(response_ids, skip_special_tokens=True)
+                    episode_scores = eval_batch.non_tensor_batch["episode_scores"].tolist()
+                    llm_raw_text_list = eval_batch.non_tensor_batch["llm_raw_text_list"].tolist()
+                    for prompt, prompt_id, response, response_id, episode_score, llm_raw_text in zip(
+                        prompts, prompt_ids, responses, response_ids, episode_scores, llm_raw_text_list
+                    ):
+                        generate_res.append(
+                            {
+                                "prompt": prompt,
+                                "response": response,
+                                "episode_score": episode_score,
+                                "llm_raw_text": llm_raw_text,
+                            }
+                        )
+                    logger.info(f"Printing 10 items of eval_batch:")
+                    logger.info(json.dumps(generate_res[:10], ensure_ascii=False))
+
                     if self.pipeline_config.render_save_dir:
                         self.executor.submit(
                             dump_rollout_render,
@@ -332,6 +362,7 @@ class AgenticPipeline(BasePipeline):
                             "llm_raw_text": llm_raw_text,
                         }
                     )
+                logger.info(f"Printing 10 items of training_batch:")
                 logger.info(json.dumps(generate_res[:10], ensure_ascii=False))
                 logger.info(json.dumps(metrics, ensure_ascii=False))
 
