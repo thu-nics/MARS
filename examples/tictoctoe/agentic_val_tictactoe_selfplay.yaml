@@ -136,7 +136,7 @@ enable_think: True # False -> no think RL
 max_actions_per_traj: 9
 reward_normalization:
   grouping: tags # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
-  method: mean_std # asym_clip / identity / mean_std
+  method: identity # asym_clip / identity / mean_std
   separate_norm_for_selfplay: true
 whiten_rewards: true
 # loss_agg_mode: token-mean
