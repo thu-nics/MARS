@@ -21,6 +21,7 @@ class TicTacToe(BaseDiscreteActionEnv):
         self.render_mode = config.render_mode
         self.built_in_opponent = config.built_in_opponent
         self.opponent_first_move = config.opponent_first_move
+        self.include_opponent_turn = config.include_opponent_turn
 
         BaseDiscreteActionEnv.__init__(self)
 

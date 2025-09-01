@@ -60,7 +60,7 @@ kl_loss_coef: 0.10
 whiten_advantages: true
 entropy_loss_coef: 0.01
 
-pretrain: /mnt/public/algm/models/Qwen3-4B/
+pretrain: /mnt/public/yuanhuining/models/Qwen3-4B/
 
 actor_train:
   model_args:
@@ -171,6 +171,27 @@ custom_envs:
       built_in_opponent: mcts  # Use MCTS opponent for evaluation
       opponent_first_move: true
       render_mode: text
+  TicTacToeEval-first-move-1000:
+    env_type: tictactoe
+    max_actions_per_traj: ${max_actions_per_traj}
+    max_steps_per_traj: ${max_actions_per_traj}
+    max_tokens: 100
+    grid_vocab: false
+    env_config:
+      built_in_opponent: mcts  # Use MCTS opponent for evaluation
+      max_simulations: 1000
+      render_mode: text
+  TicTacToeEval-second-move-1000:
+    env_type: tictactoe
+    max_actions_per_traj: ${max_actions_per_traj}
+    max_steps_per_traj: ${max_actions_per_traj}
+    max_tokens: 100
+    grid_vocab: false
+    env_config:
+      built_in_opponent: mcts  # Use MCTS opponent for evaluation
+      opponent_first_move: true
+      max_simulations: 1000
+      render_mode: text
 
 train_env_manager:
   format_penalty: 0.05 # sokoban env penalty_for_step=-0.1
@@ -185,6 +206,6 @@ val_env_manager:
   max_env_num_per_worker: 16
   env_groups: 512
   group_size: 1 # should be set to 1 because val temperature is set to 0 and same prompt leads to same output
-  tags: [TicTacToeEval-first-move, TicTacToeEval-second-move]  # Use TicTacToeEval for evaluation with MCTS opponent
-  n_groups: [256, 256] #
+  tags: [TicTacToeEval-first-move, TicTacToeEval-second-move, TicTacToeEval-first-move-1000, TicTacToeEval-second-move-1000]  # Use TicTacToeEval for evaluation with MCTS opponent
+  n_groups: [128, 128, 128, 128] #
 

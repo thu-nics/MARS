@@ -816,7 +816,7 @@ class EnvManager:
                 self._update_player_history(None, num_actions_info, next_state_entry)
             else:
                 # Self-play mode: update main history and player-specific histories
-                self._update_player_history(None, None, next_state_entry)  # main history only gets state
+                self._update_player_history(None, num_actions_info, next_state_entry)  # main history only gets state
                 self._update_player_history(current_player, num_actions_info, None)  # current player gets action/reward
                 
                 # Update opponent's history with reward and info
@@ -833,7 +833,7 @@ class EnvManager:
 
     def _format_messages(self, prepare_for_update: bool, use_raw_llm_response: bool, player_id: int = 0):
         is_self_play = self.rollout_cache["is_self_play"]  
-        history_key = self._get_history_key(player_id, is_self_play)
+        history_key = "history"
 
         if "reward" not in self.rollout_cache[history_key][-1] and (not use_raw_llm_response and prepare_for_update):
             # when prepare for update, we do not add the state from the n+1 turn to the trajectory
@@ -856,21 +856,49 @@ class EnvManager:
                 messages.append({"role": "user", "content": ""})
 
             # Original logic for single-agent mode against built-in opponent
-            # turn_idx = idx * 2 + 2 if is_self_play and player_id == 1 else idx * 2 + 1
-            turn_idx = idx * 2 + 1
-            turn_idx_content = (
-                f"Information of Turn-{turn_idx}:\n\n"
-                # f"Information of your {index_table[idx + 1]} turn:\n\n"
-                "This is your turn. The game state and legal actions for this turn are provided below. "
-                "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
-            )
+            turn_idx = idx + 1 if is_self_play else idx * 2 + 1
+            is_opponent_turn = is_self_play and idx % 2 != player_id
+            if is_opponent_turn:
+                if self.env_entry["env"].include_opponent_turn == "full":
+                    turn_idx_content = (
+                        f"Information of Turn-{turn_idx}:\n\n"
+                        "This is the other player's turn. "
+                        "The game state, legal actions, as well as the chosen action of the other player for this turn are provided below.\n\n"
+                    )
+                elif self.env_entry["env"].include_opponent_turn == "action":
+                    turn_idx_content = (
+                        f"Information of Turn-{turn_idx}:\n\n"
+                        "This is the other player's turn. The game state for this turn is not available to you. "
+                        "The legal actions and chosen action of the other player for this turn are provided below.\n\n"
+                    )
+                elif self.env_entry["env"].include_opponent_turn == "none":
+                    continue
+            else:
+                turn_idx_content = (
+                    f"Information of Turn-{turn_idx}:\n\n"
+                    "This is your turn. The game state and legal actions for this turn are provided below. "
+                    "Please choose your action and strictly follow the given output format in the response instructions.\n\n"
+                )
             messages[-1]["content"] += turn_idx_content
             if "state" in content:
-                messages[-1]["content"] += (
-                    f"GAME STATE:\n{content['state']}\n\n"
-                    f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}.\n\n"
-                )
-            if "llm_raw_response" in content:
+                if is_opponent_turn:
+                    if self.env_entry["env"].include_opponent_turn == "full":
+                        messages[-1]["content"] += (
+                            f"GAME STATE:\n{content['state']}\n\n"
+                            f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}.\n\n"
+                        )
+                    elif self.env_entry["env"].include_opponent_turn == "action":
+                        messages[-1]["content"] += (
+                            f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}.\n\n"
+                        )
+                    if len(content['actions']) > 0:
+                        messages[-1]["content"] += f"CHOSEN ACTION:\n{content['actions'][0]}\n"
+                else:
+                    messages[-1]["content"] += (
+                        f"GAME STATE:\n{content['state']}\n\n"
+                        f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}.\n\n"
+                    )
+            if "llm_raw_response" in content and not is_opponent_turn:
                 messages.append(
                     {
                         "role": "assistant",
@@ -878,11 +906,6 @@ class EnvManager:
                         "content": content["llm_raw_response"],
                     }
                 )
-            if "reward" in content and not (prepare_for_update and idx == len(self.rollout_cache[history_key]) - 1):
-                # when prepare for update, we do not add the reward from the n+1 turn to the trajectory
-                # reward_content = f"Reward:\n{content['reward']}\n"
-                reward_content = ""
-                messages.append({"role": "user", "content": reward_content})
 
         # NOTE: this assertion is important for loss mask computation
         assert all(msg["role"] == "assistant" for msg in messages[2::2])

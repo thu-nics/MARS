@@ -8,6 +8,7 @@ class TicTacToeConfig:
     render_mode: str = "text"
     built_in_opponent: str = "mcts"
     opponent_first_move: bool = False
+    include_opponent_turn: str = "full"
     
     # mcts config
     uct_c: float = 2.0                   

@@ -54,7 +54,7 @@ init_kl_coef: 0.0
 whiten_advantages: true
 entropy_loss_coef: 0
 
-pretrain: /mnt/h_public/algm/models/Qwen3-4B
+pretrain: /mnt/public/yuanhuining/models/Qwen3-4B/
 
 actor_infer:
   model_args:
