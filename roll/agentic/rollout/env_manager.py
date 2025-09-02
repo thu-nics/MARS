@@ -320,6 +320,13 @@ class EnvManager:
         acc_reward[current_player] += format_reward
         acc_reward[current_player] += self.compute_length_penalty(env_input["token_length"])
         
+        # check if the episode is done due to max steps
+        max_steps_per_traj = entry.get("max_steps_per_traj", entry["max_actions_per_traj"])
+        if entry["status"].step >= max_steps_per_traj and not turn_done:
+            entry["status"].truncated = True
+            entry["status"].terminated = True
+            turn_done = True
+
         # log the processed env state
         self._log_env_state(
             entry["env"].render(),
@@ -336,12 +343,6 @@ class EnvManager:
         if is_self_play and not turn_done:
             with self.internal_lock:
                 self.rollout_cache["current_player"] = 1 - current_player
-
-        # check if the episode is done due to max steps
-        max_steps_per_traj = entry.get("max_steps_per_traj", entry["max_actions_per_traj"])
-        if entry["status"].step >= max_steps_per_traj and not turn_done:
-            entry["status"].truncated = True
-            entry["status"].terminated = True
 
         if self.mode == "val":
             frame = entry["env"].render(mode="rgb_array")
@@ -653,6 +654,8 @@ class EnvManager:
             for k, v in turn.get("info", {}).items():
                 if k == "success":
                     env_metric[k] = float(v)
+                    continue
+                if isinstance(v, str):
                     continue
                 if k not in custom_metric:
                     custom_metric[k] = []
