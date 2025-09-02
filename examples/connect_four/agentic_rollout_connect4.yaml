@@ -82,7 +82,7 @@ enable_response_mask: True
 action_sep: "||"
 use_turn_scores: False # important to GAE when applying token-level rewards to token-level advantages. If False, will take the sum of scores as the reward for the last turn.
 enable_think: True # False -> no think RL
-max_actions_per_traj: 9
+max_actions_per_traj: 42
 
 custom_envs:
   SimpleSokoban:

@@ -133,7 +133,7 @@ enable_response_mask: True
 action_sep: "||"
 use_turn_scores: True # important to GAE when applying token-level rewards to token-level advantages. If False, will take the sum of scores as the reward for the last turn.
 enable_think: True # False -> no think RL
-max_actions_per_traj: 9
+max_actions_per_traj: 42
 reward_normalization:
   grouping: tags # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
   method: mean_std # asym_clip / identity / mean_std
