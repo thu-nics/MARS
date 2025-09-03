@@ -14,6 +14,10 @@ from .frozen_lake.config import FrozenLakeEnvConfig
 from .frozen_lake.env import FrozenLakeEnv
 from .tictactoe.config import TicTacToeConfig
 from .tictactoe.env import TicTacToe
+from .hanabi.config import HanabiConfig
+from .hanabi.env import Hanabi
+from .connect_four.config import ConnectFourConfig
+from .connect_four.env import ConnectFour
 # from .metamathqa.env import MetaMathQAEnv
 # from .metamathqa.config import MetaMathQAEnvConfig
 
@@ -24,6 +28,8 @@ REGISTERED_ENVS = {
     "sokoban": SokobanEnv,
     "frozen_lake": FrozenLakeEnv,
     "tictactoe": TicTacToe,
+    "hanabi": Hanabi,
+    "connect_four": ConnectFour,
     # 'alfworld': AlfredTXTEnv,
     # "metamathqa": MetaMathQAEnv,
 }
@@ -34,6 +40,8 @@ REGISTERED_ENV_CONFIGS = {
     "sokoban": SokobanEnvConfig,
     "frozen_lake": FrozenLakeEnvConfig,
     "tictactoe": TicTacToeConfig,
+    "hanabi": HanabiConfig,
+    "connect_four": ConnectFourConfig,
     # 'alfworld': AlfredEnvConfig,
     # "metamathqa": MetaMathQAEnvConfig,
 }
