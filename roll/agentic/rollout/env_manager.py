@@ -212,7 +212,7 @@ class EnvManager:
             "upper": 0.0,
             "lower": 0.5,
             "min_len": 11,
-            "max_len": 1024,
+            "max_len": 2048,
             "coef": 1,
         }
 

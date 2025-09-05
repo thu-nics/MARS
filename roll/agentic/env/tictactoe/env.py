@@ -80,6 +80,8 @@ class TicTacToe(BaseDiscreteActionEnv):
         rewards = self.state.rewards()
         done = self.state.is_terminal()
         info = self._get_info()
+        if info != {}:
+            rewards = [0.1 if reward == 0 else reward for reward in rewards]
         return observation, rewards, done, info
 
     def _opponent_step(self):
@@ -181,7 +183,7 @@ class TicTacToe(BaseDiscreteActionEnv):
         observation = self.render()
         done = True
         if player_id == 0:
-            reward = [-1, 0]
+            reward = [-10, 0]
             info = {
                 "player_0_return": -1,
                 "player_1_return": 1,
@@ -195,7 +197,7 @@ class TicTacToe(BaseDiscreteActionEnv):
                 "draw": False,
             }
         else:
-            reward = [0, -1]
+            reward = [0, -10]
             info = {
                 "player_0_return": 1,
                 "player_1_return": -1,

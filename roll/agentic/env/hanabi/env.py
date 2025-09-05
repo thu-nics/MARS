@@ -106,6 +106,8 @@ class Hanabi(BaseDiscreteActionEnv):
         rewards = self.state.rewards()
         done = self.state.is_terminal()
         info = self._get_info(chance_node_action)
+        if len(info) > 1:
+            rewards = [0.1 if reward == 0 else reward for reward in rewards]
         return observation, rewards, done, info
 
     def _opponent_step(self):
@@ -251,7 +253,7 @@ class Hanabi(BaseDiscreteActionEnv):
         done = True
         returns = self.state.returns()
         if player_id == 0:
-            reward = [-returns[0], 0]
+            reward = [-returns[0] - 10, 0]
             info = {
                 "player_0_return": 0,
                 "player_1_return": 0,
@@ -261,7 +263,7 @@ class Hanabi(BaseDiscreteActionEnv):
                 "player_1_lose_for_overlong_response": 0,
             }
         else:
-            reward = [0, -returns[1]]
+            reward = [0, -returns[1] - 10]
             info = {
                 "player_0_return": 0,
                 "player_1_return": 0,

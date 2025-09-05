@@ -998,6 +998,7 @@ def compute_advantage(
     advantage_clip=None,
     whiten_advantages=False,
     whiten_rewards=False,
+    advantage_norm=None,
     response_mask=None,
 ):
     if response_mask is None:
@@ -1019,8 +1020,6 @@ def compute_advantage(
         advantages, returns = compute_reinforce_return(
             token_level_rewards=token_level_rewards, gamma=gamma, lambd=lambd
         )
-        # 对advantages中所有不同的数值进行归一化
-        advantages = normalize_unique_values_by_player(advantages, data)
     elif adv_estimator == "grpo":
         # NOTE: For grpo, remember to manually setting AgenticConfig.reward_normalization to mean_std
         advantages, returns = compute_reinforce_return(
@@ -1030,6 +1029,9 @@ def compute_advantage(
         raise NotImplementedError
 
     data.batch["raw_advantages"] = advantages
+    # 对advantages中所有不同的数值进行归一化
+    if advantage_norm:
+        advantages = normalize_unique_values_by_player(advantages, data, mode=advantage_norm)
     if whiten_advantages:
         # TODO whiten过程中是否要考虑response的长度？
         advantages = masked_whiten(values=advantages, mask=response_mask)
