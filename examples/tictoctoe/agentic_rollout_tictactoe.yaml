@@ -104,7 +104,7 @@ custom_envs:
     max_tokens: 100
     grid_vocab: false
     env_config:
-      built_in_opponent: none
+      built_in_opponent: mcts
       render_mode: text
 
   TicTacToe-second-move:
@@ -114,7 +114,7 @@ custom_envs:
     max_tokens: 100
     grid_vocab: false
     env_config:
-      built_in_opponent: none
+      built_in_opponent: mcts
       opponent_first_move: true
       render_mode: text
 

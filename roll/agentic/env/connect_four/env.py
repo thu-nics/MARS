@@ -53,22 +53,58 @@ class ConnectFour(BaseDiscreteActionEnv):
         try:
             with all_seed(seed):
                 self.state = self._env.new_initial_state()
+                initial_observation = {
+                        'observation': self.render(),
+                        'legal_actions': self.get_all_actions(),
+                }
+                execute_results = []
                 if self.built_in_opponent != "none" and self.opponent_first_move:
+                    current_player = self.current_player
                     opponent_action = self._opponent_step()
-                    self._step(opponent_action)
-                return self.render()
+                    observation, rewards, done, info = self._step(opponent_action)
+                    execute_results.append({
+                        'current_player': current_player,
+                        'action': self._action_to_string(current_player, opponent_action),
+                        'rewards': rewards,
+                        'done': done,
+                        'info': info,
+                        'observation': observation,
+                        'legal_actions': self.get_all_actions(),
+                    })
+                return initial_observation, execute_results
         except (RuntimeError, RuntimeWarning) as e:
             next_seed = abs(hash(str(seed))) % (2**32) if seed is not None else 0
             return self.reset(next_seed)
 
     def step(self, action):
+        execute_results = []
+        current_player = self.current_player
         observation, rewards, done, info = self._step(action)
+
+        execute_results.append({
+            'current_player': current_player,
+            'action': self._action_to_string(current_player, action),
+            'rewards': rewards,
+            'done': done,
+            'info': info,
+            'observation': observation,
+            'legal_actions': self.get_all_actions(),
+        })
         # If chose to play with built-in opponent, we need to let the opponent take action
         if self.built_in_opponent != "none" and not done:
+            current_player = self.current_player
             opponent_action = self._opponent_step()
-            observation, _rewards, done, info = self._step(opponent_action)
-            rewards = [rewards[i] + _rewards[i] for i in range(2)]
-        return observation, rewards, done, info
+            observation, rewards, done, info = self._step(opponent_action)
+            execute_results.append({
+                'current_player': current_player,
+                'action': self._action_to_string(current_player, opponent_action),
+                'rewards': rewards,
+                'done': done,
+                'info': info,
+                'observation': observation,
+                'legal_actions': self.get_all_actions(),
+            })
+        return execute_results
 
     def _step(self, action):
         if isinstance(action, str):
@@ -203,7 +239,16 @@ class ConnectFour(BaseDiscreteActionEnv):
                 "player_1_success": False,
                 "draw": False,
             }
-        return observation, reward, done, info
+        execute_results = [{
+            'current_player': player_id,
+            'action': '',
+            'rewards': reward,
+            'done': done,
+            'info': info,
+            'observation': None,
+            'legal_actions': None,
+        }]
+        return execute_results
 
     def render(self, mode: str = "text"):
         if mode == "text":
@@ -268,13 +313,13 @@ if __name__ == "__main__":
             action = random.choice(list(env.get_all_actions().values()))
             # action = env.mcts_bot.step(env.state)
             print(f"Player {env.current_player} taking action: {action}")
-            observations, rewards, done, info = env.step(action)
-            print(f"observations: \n{observations}")
-            print(f"rewards: {rewards}")
-            print(f"done: {done}")
-            print(f"info: {info}")
+            execute_result = env.step(action)
+            print(f"observations: \n{execute_result[-1]['observation']}")
+            print(f"rewards: {execute_result[-1]['rewards']}")
+            print(f"done: {execute_result[-1]['done']}")
+            print(f"info: {execute_result[-1]['info']}")
             print("-" * 100)
-        results.append(info['winner'])
+        results.append(execute_result[-1]['info']['winner'])
     print("player 0 win rate: ", results.count(0) / len(results))
     print("player 1 win rate: ", results.count(1) / len(results))
     print("draw rate: ", results.count(-1) / len(results))
