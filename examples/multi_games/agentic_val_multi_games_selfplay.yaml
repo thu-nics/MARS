@@ -133,7 +133,7 @@ enable_response_mask: True
 action_sep: "||"
 use_turn_scores: True # important to GAE when applying token-level rewards to token-level advantages. If False, will take the sum of scores as the reward for the last turn.
 enable_think: True # False -> no think RL
-max_actions_per_traj: 42
+max_actions_per_traj: 9
 reward_normalization:
   grouping: tags # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
   method: mean # asym_clip / identity / mean_std
@@ -144,8 +144,8 @@ advantage_norm: mean
 pg_clip_high: 0.20
 
 custom_envs:
-  Connect4:
-    env_type: connect_four
+  TicTacToe:
+    env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
     max_tokens: 100
@@ -153,8 +153,16 @@ custom_envs:
     env_config:
       built_in_opponent: none  # Changed from "mcts" to "none" for self-play training
       render_mode: text
-  Connect4Eval-first-move:
-    env_type: connect_four
+  Hanabi:
+    env_type: hanabi
+    max_actions_per_traj: ${max_actions_per_traj}
+    max_steps_per_traj: ${max_actions_per_traj}
+    max_tokens: 100
+    grid_vocab: false
+    env_config:
+      render_mode: text
+  TicTacToeEval-first-move:
+    env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
     max_tokens: 100
@@ -162,8 +170,8 @@ custom_envs:
     env_config:
       built_in_opponent: mcts  # Use MCTS opponent for evaluation
       render_mode: text
-  Connect4Eval-second-move:
-    env_type: connect_four
+  TicTacToeEval-second-move:
+    env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
     max_tokens: 100
@@ -172,8 +180,8 @@ custom_envs:
       built_in_opponent: mcts  # Use MCTS opponent for evaluation
       opponent_first_move: true
       render_mode: text
-  Connect4Eval-first-move-1000:
-    env_type: connect_four
+  TicTacToeEval-first-move-1000:
+    env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
     max_tokens: 100
@@ -182,8 +190,8 @@ custom_envs:
       built_in_opponent: mcts  # Use MCTS opponent for evaluation
       max_simulations: 1000
       render_mode: text
-  Connect4Eval-second-move-1000:
-    env_type: connect_four
+  TicTacToeEval-second-move-1000:
+    env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
     max_tokens: 100
@@ -200,13 +208,19 @@ train_env_manager:
   env_groups: 32
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
-  tags: [Connect4]
-  n_groups: [32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  tags: [TicTacToe, Hanabi]
+  n_groups: [16, 16] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
 
 val_env_manager:
   max_env_num_per_worker: 16
-  env_groups: 512
+  env_groups: 500
   group_size: 1 # should be set to 1 because val temperature is set to 0 and same prompt leads to same output
-  tags: [Connect4Eval-first-move, Connect4Eval-second-move, Connect4Eval-first-move-1000, Connect4Eval-second-move-1000]  # Use Connect4Eval for evaluation with MCTS opponent
-  n_groups: [128, 128, 128, 128] #
+  tags: [
+    Hanabi,
+    TicTacToeEval-first-move, 
+    TicTacToeEval-second-move, 
+    TicTacToeEval-first-move-1000, 
+    TicTacToeEval-second-move-1000
+  ]  # Use TicTacToeEval for evaluation with MCTS opponent
+  n_groups: [100, 100, 100, 100, 100] #
 

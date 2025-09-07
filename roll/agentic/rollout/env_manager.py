@@ -538,7 +538,12 @@ class EnvManager:
             },
             batch_size=input_ids.shape[0],
         )
-        scores = [[i["reward"] for i in self.rollout_cache[history_key]]]
+        try:
+            scores = [[i["reward"] for i in self.rollout_cache[history_key]]]
+        except:
+            print("rollout_cache: ", self.rollout_cache)
+            print("history_key: ", history_key)
+            raise ValueError("reward not found in rollout_cache")
         # print("scores: ", scores)
         episode_scores = [sum(i) for i in scores]
         penalty = self.rollout_cache["penalty"]
