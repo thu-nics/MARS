@@ -247,7 +247,6 @@ class EnvManager:
         initial_state_entry = {
             "state": initial_observation['observation'],
             "legal_actions": initial_observation['legal_actions'],
-            "actions_left": entry["max_actions_per_traj"],
         }
 
         # update rollout cache
@@ -294,9 +293,7 @@ class EnvManager:
 
     def step(self, llm_output: DataProto):
         env_input: Dict = self.get_env_input(llm_output)
-
         entry = self.env_entry
-        actions_left_before = entry["max_actions_per_traj"] - entry["status"].num_actions
 
         # execute actions in env
         current_player = self.rollout_cache['current_player']
@@ -736,11 +733,11 @@ class EnvManager:
                 "actions": turn['action'],
                 "reward": turn['rewards'][current_player],
                 "info": turn['info'],
+                "actions_left": actions_left,
             }
             next_state_entry = {
                 "state": turn['observation'],
                 "legal_actions": turn['legal_actions'],
-                "actions_left": actions_left,
             }
             if idx == 0 and env_input is not None:
                 length_penalty = self.compute_length_penalty(env_input["token_length"])
@@ -766,7 +763,7 @@ class EnvManager:
                     }, None)
                 
                 # If episode continues, give opponent the next state
-                if not turn['done']:
+                if not self.env_entry["status"].terminated and not self.env_entry["status"].truncated:
                     self._update_player_history(opponent_player, None, next_state_entry)
 
     def _format_messages(self, prepare_for_update: bool, use_raw_llm_response: bool, player_id: int = 0):
