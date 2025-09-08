@@ -67,17 +67,17 @@ class Hanabi(BaseDiscreteActionEnv):
                 self.num_steps = 0
                 self.history.clear()
 
-                initial_observation = {
-                    'observation': self.render(),
-                    'legal_actions': self.get_all_actions(),
-                }
-                execute_results = []
                 while self.state.is_chance_node():
                     outcomes_with_probs = self.state.chance_outcomes()
                     actions, probs = zip(*outcomes_with_probs)
                     action = random.choices(actions, weights=probs)[0]
                     self.state.apply_action(action)
 
+                initial_observation = {
+                    'observation': self.render(),
+                    'legal_actions': self.get_all_actions(),
+                }
+                execute_results = []
                 if self.built_in_opponent != "none" and self.opponent_first_move:
                     current_player = self.current_player
                     opponent_action = self._opponent_step()
@@ -252,6 +252,8 @@ class Hanabi(BaseDiscreteActionEnv):
         return legal_actions
 
     def _action_to_string(self, agent_id, action):
+        if isinstance(action, str):
+            return action
         action_str = self.state.action_to_string(agent_id, action)
         action_str = action_str.replace("(", "<").replace(")", ">")
         action_str = action_str.replace("Play", "Play card")
