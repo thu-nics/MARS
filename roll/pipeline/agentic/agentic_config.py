@@ -152,6 +152,12 @@ class AgenticConfig(BaseConfig):
     # )
     whiten_rewards: bool = field(default=False, metadata={"help": "Whiten the rewards before compute advantages."})
     whiten_advantages: bool = field(default=False, metadata={"help": "Whiten the advantage."})
+    advantage_norm: Literal["mean", "mean_std", None] = field(
+        default=None,
+        metadata={
+            "help": "Advantage normalization type: 'mean' (normalize to mean 0), 'mean_std' (normalize to mean 0 and std 1), 'none' (no normalization)"
+        },
+    )
     advantage_clip: float = field(default=None, metadata={"help": "advantage_clip value"})
     adv_estimator: Literal["gae", "reinforce", "grpo"] = field(
         default="gae", metadata={"help": "advantage estimator: gae (GAE)."}

@@ -14,6 +14,10 @@ from .frozen_lake.config import FrozenLakeEnvConfig
 from .frozen_lake.env import FrozenLakeEnv
 from .tictactoe.config import TicTacToeConfig
 from .tictactoe.env import TicTacToe
+from .hanabi.config import HanabiConfig
+from .hanabi.env import Hanabi
+from .connect_four.config import ConnectFourConfig
+from .connect_four.env import ConnectFour
 from .kuhn_poker.config import KuhnPokerConfig
 from .kuhn_poker.env import KuhnPoker
 from .leduc_poker.config import LeducPokerConfig
@@ -28,8 +32,6 @@ REGISTERED_ENVS = {
     "sokoban": SokobanEnv,
     "frozen_lake": FrozenLakeEnv,
     "tictactoe": TicTacToe,
-    "kuhn_poker": KuhnPoker,
-    "leduc_poker": LeducPoker,
     # 'alfworld': AlfredTXTEnv,
     # "metamathqa": MetaMathQAEnv,
 }
@@ -40,6 +42,8 @@ REGISTERED_ENV_CONFIGS = {
     "sokoban": SokobanEnvConfig,
     "frozen_lake": FrozenLakeEnvConfig,
     "tictactoe": TicTacToeConfig,
+    "hanabi": HanabiConfig,
+    "connect_four": ConnectFourConfig,
     "kuhn_poker": KuhnPokerConfig,
     "leduc_poker": LeducPokerConfig,
     # 'alfworld': AlfredEnvConfig,

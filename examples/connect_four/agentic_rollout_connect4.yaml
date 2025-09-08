@@ -82,7 +82,7 @@ enable_response_mask: True
 action_sep: "||"
 use_turn_scores: False # important to GAE when applying token-level rewards to token-level advantages. If False, will take the sum of scores as the reward for the last turn.
 enable_think: True # False -> no think RL
-max_actions_per_traj: 9
+max_actions_per_traj: 42
 
 custom_envs:
   SimpleSokoban:
@@ -97,8 +97,8 @@ custom_envs:
       num_boxes: 1
       max_steps: ${max_actions_per_traj}
       
-  TicTacToe-first-move:
-    env_type: tictactoe
+  Connect4-first-move:
+    env_type: connect_four
     max_actions_per_traj:  ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
     max_tokens: 100
@@ -107,8 +107,8 @@ custom_envs:
       built_in_opponent: mcts
       render_mode: text
 
-  TicTacToe-second-move:
-    env_type: tictactoe
+  Connect4-second-move:
+    env_type: connect_four
     max_actions_per_traj:  ${max_actions_per_traj}
     max_steps_per_traj: ${max_actions_per_traj}
     max_tokens: 100
@@ -124,5 +124,5 @@ train_env_manager:
   env_groups: 64
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
-  tags: [TicTacToe-first-move, TicTacToe-second-move]
+  tags: [Connect4-first-move, Connect4-second-move]
   n_groups: [32, 32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation

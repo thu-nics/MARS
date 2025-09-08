@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import random
-from roll.agentic.env.tictactoe.config import TicTacToeConfig
+from roll.agentic.env.connect_four.config import ConnectFourConfig
 from roll.agentic.utils import all_seed
 from roll.agentic.env.base import BaseDiscreteActionEnv
 from textwrap import dedent
@@ -10,12 +10,13 @@ import json
 from typing import Optional, Dict, Any
 import re
 from PIL import Image
+import warnings
 
 
-class TicTacToe(BaseDiscreteActionEnv):
-    """Tic-Tac-Toe game environment using OpenSpiel."""
+class ConnectFour(BaseDiscreteActionEnv):
+    """Connect Four game environment using OpenSpiel."""
 
-    def __init__(self, config: TicTacToeConfig = TicTacToeConfig()):
+    def __init__(self, config: ConnectFourConfig = ConnectFourConfig()):
         # Using mappings directly from config
         self.config = config
         self.render_mode = config.render_mode
@@ -26,7 +27,7 @@ class TicTacToe(BaseDiscreteActionEnv):
         BaseDiscreteActionEnv.__init__(self)
 
         import pyspiel
-        self._env = pyspiel.load_game("tic_tac_toe")
+        self._env = pyspiel.load_game("connect_four")
         self.state = None
 
         if self.built_in_opponent == "mcts":
@@ -115,7 +116,6 @@ class TicTacToe(BaseDiscreteActionEnv):
         observation = self.render()
         rewards = self.state.rewards()
         done = self.state.is_terminal()
-        info = self._get_info()
         if info != {}:
             rewards = [0.1 if reward == 0 else reward for reward in rewards]
         return observation, rewards, done, info
@@ -138,26 +138,26 @@ class TicTacToe(BaseDiscreteActionEnv):
             raise ValueError(f"Invalid prompt mode: {mode}")
 
     def _get_prefix_prompt(self, think=True, player_id=0):
-        system_prompt = "You are an AI agent that makes optimal decisions to win in the game of tic-tac-toe."
+        # TODO: Implement Connect Four specific prompt
+        system_prompt = "You are an AI agent that makes optimal decisions to win in the game of Connect Four."
         rules = (
-            "1. Tic-tac-toe is a two-player board game played on a three-by-three grid. "
-            "The grid is 0-indexed, where (0,0) is the top-left corner and (2,2) is the bottom-right corner.\n"
-            "2. Two players take turns placing their marks X and O in empty cells of the grid.\n"
-            "3. The player who first places three of their marks in a horizontal, vertical, or diagonal line wins.\n"
-            "4. If all cells are filled and no player wins, the game ends in a draw."
+            "1. Connect Four is a two-player board game played on a 6x7 grid. "
+            "Players take turns dropping their pieces into columns.\n"
+            "2. The goal is to connect four of your pieces horizontally, vertically, or diagonally.\n"
+            "3. Pieces fall to the bottom of the column or stack on top of existing pieces.\n"
+            "4. The first player to connect four pieces wins. If the board fills up without a winner, it's a draw."
         )
         mark = "O" if player_id == 1 else "X"
         opponent_mark = "O" if mark == "X" else "X"
         information = (
             f"1. Your mark is {mark}. You are competing with another player controlling the mark {opponent_mark}.\n"
             "2. In each of your turns:\n"
-            "   a. The game state demonstrates the current board with a three-line text grid, where 'X' and 'O' are the marks of the two players, and '_' represents empty cells.\n"
-            "   b. You need to chose an action to place your mark in an empty cell, based on the given game state and the history of your decisions.\n"
-            f"   c. All legal actions for the current turn are provided in the format of `<{mark}({{row}},{{column}})>`, where `{mark}` is your mark, "
-            "and {row} and {column} are integers indicating the row and column of the cell to place your mark."
+            "   a. The game state shows the current board as a 6x7 grid.\n"
+            "   b. You need to choose a column (0-6) to drop your piece, where 0 denotes the leftmost column, 6 denotes the rightmost column.\n"
+            f"   c. All legal actions are provided as `<{mark}({{column}})>`, where `{mark}` is your mark, and {{column}} is the column number."
         )
-        FORMAT_PROMPT = "<answer>{your chosen action}</answer>"
-        FORMAT_PROMPT_EXAMPLE = f"<answer><{mark}(0,0)></answer>"
+        FORMAT_PROMPT = "<answer>{your chosen column}</answer>"
+        FORMAT_PROMPT_EXAMPLE = f"<answer><{mark}(3)></answer>"
         instructions = (
             f"Always choose only one action from the legal actions and output `{FORMAT_PROMPT}` with no extra text after you finish the thinking process. "
             f"For example, `{FORMAT_PROMPT_EXAMPLE}`. "
@@ -184,18 +184,11 @@ class TicTacToe(BaseDiscreteActionEnv):
         return legal_actions
 
     def _action_to_string(self, player_id, action):
-        if isinstance(action, str):
-            return action
-        mark = "X" if player_id == 0 else "O"
-        row = action // 3
-        column = action % 3
-        return f"<{mark}({row},{column})>"
+        mark = "O" if player_id == 1 else "X"
+        return f"<{mark}({str(action)})>"
 
     def _string_to_action(self, action_str):
-        mark = action_str[1]
-        row = int(action_str[3])
-        column = int(action_str[5])
-        return row * 3 + column
+        return int(action_str[3])
 
     def _get_info(self):
         if self.state is None or not self.state.is_terminal():
@@ -268,54 +261,30 @@ class TicTacToe(BaseDiscreteActionEnv):
     def _render_text(self):
         """Render the game state as text."""
         if self.state is None:
-            return "___\n___\n___"
-        board = np.array([list(line) for line in str(self.state).strip().split("\n")])
+            # Return empty 6x7 board
+            return "\n".join(["_______" for _ in range(6)])
+        
+        # Get the board representation from OpenSpiel
+        board_str = str(self.state).strip()
+        lines = board_str.split("\n")
+        
+        # Process the board representation
         text_repr = []
-        for i in range(3):
-            row = []
-            for j in range(3):
-                piece = board[i][j]
-                if piece == ".":
-                    row.append("_")
-                elif piece == "x":
-                    row.append("X")
-                elif piece == "o":
-                    row.append("O")
-                else:
-                    row.append(piece)
-            text_repr.append("".join(row))
-        return "\n".join(text_repr)
+        for line in lines:
+            if line.strip():
+                # Replace dots with underscores for empty cells
+                processed_line = line.replace(".", "_")
+                text_repr.append(processed_line)
+        
+        # Ensure we have 6 rows
+        while len(text_repr) < 6:
+            text_repr.append("_______")
+        
+        return "\n".join(text_repr[:6])
 
     def _render_rgb_array(self):
-        fig, ax = plt.subplots(figsize=(4, 4))
-        ax.set_xlim(-0.5, 2.5)
-        ax.set_ylim(-0.5, 2.5)
-        ax.invert_yaxis()
-        for x in range(1, 3):
-            ax.plot([x - 0.5, x - 0.5], [-0.5, 2.5], color="black", linewidth=2)
-        for y in range(1, 3):
-            ax.plot([-0.5, 2.5], [y - 0.5, y - 0.5], color="black", linewidth=2)
-        ax.set_xticks([0, 1, 2])
-        ax.set_yticks([0, 1, 2])
-        ax.set_xticklabels(["0", "1", "2"])
-        ax.set_yticklabels(["0", "1", "2"])
-        if self.state is not None:
-            board = np.array([list(line) for line in str(self.state).strip().split("\n")])
-            for i in range(3):
-                for j in range(3):
-                    piece = board[i][j]
-                    if piece != ".":
-                        color = "red" if piece == "x" else "blue"
-                        ax.text(j, i, piece.upper(), fontsize=30, ha="center", va="center", color=color)
-        ax.set_aspect("equal")
-
-        # convert matplotlib figure to numpy array, avoid file I/O
-        fig.canvas.draw()
-        buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        plt.close(fig)
-        image = Image.fromarray(buf)
-        return image
+        warnings.warn("Connect Four does not support image rendering yet.")
+        return None
 
     def close(self):
         """Close the environment."""
@@ -328,10 +297,10 @@ if __name__ == "__main__":
     print("-" * 100)
     print("Basic unit test:")
     print("-" * 100)
-    env = TicTacToe()
+    env = ConnectFour()
     
     results = []
-    for i in range(100):
+    for i in range(1):
         print('-' * 100)
         print(f'Episode {i}')
         print('-' * 100)
@@ -345,7 +314,7 @@ if __name__ == "__main__":
             # action = env.mcts_bot.step(env.state)
             print(f"Player {env.current_player} taking action: {action}")
             execute_result = env.step(action)
-            print(f"observation: \n{execute_result[-1]['observation']}")
+            print(f"observations: \n{execute_result[-1]['observation']}")
             print(f"rewards: {execute_result[-1]['rewards']}")
             print(f"done: {execute_result[-1]['done']}")
             print(f"info: {execute_result[-1]['info']}")

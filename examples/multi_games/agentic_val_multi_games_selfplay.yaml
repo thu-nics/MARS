@@ -153,6 +153,14 @@ custom_envs:
     env_config:
       built_in_opponent: none  # Changed from "mcts" to "none" for self-play training
       render_mode: text
+  Hanabi:
+    env_type: hanabi
+    max_actions_per_traj: ${max_actions_per_traj}
+    max_steps_per_traj: ${max_actions_per_traj}
+    max_tokens: 100
+    grid_vocab: false
+    env_config:
+      render_mode: text
   TicTacToeEval-first-move:
     env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
@@ -200,13 +208,19 @@ train_env_manager:
   env_groups: 32
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
-  tags: [TicTacToe]
-  n_groups: [32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  tags: [TicTacToe, Hanabi]
+  n_groups: [16, 16] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
 
 val_env_manager:
   max_env_num_per_worker: 16
-  env_groups: 512
+  env_groups: 500
   group_size: 1 # should be set to 1 because val temperature is set to 0 and same prompt leads to same output
-  tags: [TicTacToeEval-first-move, TicTacToeEval-second-move, TicTacToeEval-first-move-1000, TicTacToeEval-second-move-1000]  # Use TicTacToeEval for evaluation with MCTS opponent
-  n_groups: [128, 128, 128, 128] #
+  tags: [
+    Hanabi,
+    TicTacToeEval-first-move, 
+    TicTacToeEval-second-move, 
+    TicTacToeEval-first-move-1000, 
+    TicTacToeEval-second-move-1000
+  ]  # Use TicTacToeEval for evaluation with MCTS opponent
+  n_groups: [100, 100, 100, 100, 100] #
 
