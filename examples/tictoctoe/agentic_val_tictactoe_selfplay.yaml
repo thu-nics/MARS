@@ -46,8 +46,8 @@ rollout_batch_size: 128
 val_batch_size: 1024
 sequence_length: 16384
 
-reward_clip: 10
-advantage_clip: 4
+# reward_clip: 10
+# advantage_clip: 4
 dual_clip_loss: true
 ppo_epochs: 1
 adv_estimator: "reinforce"
@@ -55,10 +55,10 @@ adv_estimator: "reinforce"
 #dual_clip_loss: True
 init_kl_coef: 0.0
 use_kl_loss: true
-kl_loss_coef: 0.10
+kl_loss_coef: 0.20
 
 whiten_advantages: true
-entropy_loss_coef: 0.01
+entropy_loss_coef: 0
 
 pretrain: /mnt/public/yuanhuining/models/Qwen3-4B/
 
@@ -103,7 +103,7 @@ actor_infer:
     top_p: 0.99
     top_k: 100
     num_beams: 1
-    temperature: 0.99
+    temperature: 0.5
     num_return_sequences: 1
   data_args:
     template: qwen3
@@ -136,9 +136,10 @@ enable_think: True # False -> no think RL
 max_actions_per_traj: 9
 reward_normalization:
   grouping: tags # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
-  method: mean_std # asym_clip / identity / mean_std
+  method: mean # asym_clip / identity / mean_std
   separate_norm_for_selfplay: true
 whiten_rewards: true
+advantage_norm: mean
 # loss_agg_mode: token-mean
 pg_clip_high: 0.20
 

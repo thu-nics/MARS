@@ -281,6 +281,7 @@ class AgenticPipeline(BasePipeline):
                             advantage_clip=self.pipeline_config.advantage_clip,
                             whiten_advantages=self.pipeline_config.whiten_advantages,
                             whiten_rewards=self.pipeline_config.whiten_rewards,
+                            advantage_norm=self.pipeline_config.advantage_norm,
                         )
                     metrics["time/compute_adv"] = compute_adv_timer.last
 

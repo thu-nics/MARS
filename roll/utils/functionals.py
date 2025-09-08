@@ -458,6 +458,118 @@ def batch_reward_norm(response_level_rewards: torch.Tensor, div_std=True):
     return normalized_rewards
 
 
+def normalize_unique_values(tensor: torch.Tensor, mode="mean") -> torch.Tensor:
+    """
+    对张量中所有不同的数值进行归一化。
+    例如：如果tensor为[1, 1, 1, 2, 2, 3, 3, 3, 3]，
+    那么将[1, 2, 3]归一化为[-1, 0, 1]，
+    最终结果为[-1, -1, -1, 0, 0, 1, 1, 1, 1]
+    
+    Args:
+        tensor: 输入张量，形状为(bs, seq_len)或任意形状
+        
+    Returns:
+        归一化后的张量，保持原始形状
+    """
+    with torch.no_grad():
+        # 获取所有不同的数值
+        unique_values = torch.unique(tensor)
+        
+        # 如果只有一个唯一值，直接返回零张量
+        if len(unique_values) == 1:
+            return torch.zeros_like(tensor)
+        
+        # 对唯一值进行归一化：减去均值，除以标准差
+        unique_mean = unique_values.mean()
+        unique_std = unique_values.std()
+        
+        if unique_std == 0:
+            # 如果标准差为0，说明所有值都相同，返回零张量
+            return torch.zeros_like(tensor)
+        
+        if mode == "mean_std":
+            normalized_unique = (unique_values - unique_mean) / (unique_std + 1e-6)
+        elif mode == "mean":
+            normalized_unique = unique_values - unique_mean
+        else:
+            raise ValueError(f"Invalid normalization mode: {mode}")
+        
+        # 创建映射字典：原始值 -> 归一化值
+        value_mapping = {}
+        for i, original_val in enumerate(unique_values):
+            value_mapping[original_val.item()] = normalized_unique[i].item()
+        
+        # 创建结果张量
+        result = torch.zeros_like(tensor)
+        
+        # 对每个唯一值进行替换
+        for original_val, normalized_val in value_mapping.items():
+            mask = (tensor == original_val)
+            result[mask] = normalized_val
+            
+        return result
+
+
+def normalize_unique_values_by_player(tensor: torch.Tensor, data: "DataProto", mode="mean") -> torch.Tensor:
+    """
+    对张量中所有不同的数值进行归一化，分别对两个玩家单独处理。
+    参考 reward_normalize_by_player 的实现方式。
+    
+    Args:
+        tensor: 输入张量，形状为(bs, seq_len)或任意形状
+        data: DataProto包含group_ids信息
+        mode: 归一化模式，"mean"或"mean_std"
+        
+    Returns:
+        归一化后的张量，保持原始形状
+    """
+    # 提取玩家信息从group_ids
+    group_ids = data.non_tensor_batch.get("group_ids", [])
+    if len(group_ids) == 0:
+        # 如果没有group_ids，回退到普通的归一化
+        return normalize_unique_values(tensor, mode=mode)
+    
+    # 识别玩家索引
+    player_0_indices = []
+    player_1_indices = []
+    
+    for i, group_id in enumerate(group_ids):
+        if isinstance(group_id, str) and "_p" in group_id:
+            player_id = group_id.split("_p")[-1]
+            if player_id == "0":
+                player_0_indices.append(i)
+            elif player_id == "1":
+                player_1_indices.append(i)
+        else:
+            # 如果没有玩家信息，默认分配给玩家0
+            player_0_indices.append(i)
+    
+    # 如果没有找到清晰的玩家分离，回退到普通归一化
+    if len(player_0_indices) == 0 and len(player_1_indices) == 0:
+        return normalize_unique_values(tensor, mode=mode)
+    
+    # 创建结果张量
+    normalized_tensor = tensor.clone()
+    
+    # 对玩家0的tensor进行归一化（如果存在）
+    if len(player_0_indices) > 0:
+        player_0_indices_tensor = torch.tensor(player_0_indices, dtype=torch.long)
+        player_0_tensor = tensor[player_0_indices_tensor]
+        
+        player_0_normalized = normalize_unique_values(player_0_tensor, mode=mode)
+        normalized_tensor[player_0_indices_tensor] = player_0_normalized
+    
+    # 对玩家1的tensor进行归一化（如果存在）
+    if len(player_1_indices) > 0:
+        player_1_indices_tensor = torch.tensor(player_1_indices, dtype=torch.long)
+        player_1_tensor = tensor[player_1_indices_tensor]
+        
+        player_1_normalized = normalize_unique_values(player_1_tensor, mode=mode)
+        normalized_tensor[player_1_indices_tensor] = player_1_normalized
+    
+    return normalized_tensor
+
+
 def group_reward_norm(data: "DataProto", n_sample=-1, div_std=True, div_std_global=False):
     assert n_sample > 1, "n_sample must > 1"
     response_level_rewards = data.batch["response_level_rewards"].clone().detach()
@@ -886,6 +998,7 @@ def compute_advantage(
     advantage_clip=None,
     whiten_advantages=False,
     whiten_rewards=False,
+    advantage_norm=None,
     response_mask=None,
 ):
     if response_mask is None:
@@ -916,6 +1029,9 @@ def compute_advantage(
         raise NotImplementedError
 
     data.batch["raw_advantages"] = advantages
+    # 对advantages中所有不同的数值进行归一化
+    if advantage_norm:
+        advantages = normalize_unique_values_by_player(advantages, data, mode=advantage_norm)
     if whiten_advantages:
         # TODO whiten过程中是否要考虑response的长度？
         advantages = masked_whiten(values=advantages, mask=response_mask)
