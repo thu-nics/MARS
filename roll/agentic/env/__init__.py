@@ -32,6 +32,10 @@ REGISTERED_ENVS = {
     "sokoban": SokobanEnv,
     "frozen_lake": FrozenLakeEnv,
     "tictactoe": TicTacToe,
+    "hanabi": Hanabi,
+    "connect_four": ConnectFour,
+    "kuhn_poker": KuhnPoker,
+    "leduc_poker": LeducPoker,
     # 'alfworld': AlfredTXTEnv,
     # "metamathqa": MetaMathQAEnv,
 }

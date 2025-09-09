@@ -14,3 +14,6 @@ class LeducPokerConfig:
     uct_c: float = 2.0                   
     max_simulations: int = 100
     rollout_count: int = 10
+    
+    # cfr config
+    cfr_iterations: int = 1000

@@ -44,6 +44,20 @@ class LeducPoker(BaseDiscreteActionEnv):
                 solve=False,
                 random_state=random_state,
             )
+        elif self.built_in_opponent == "cfr":
+            from open_spiel.python.algorithms import cfr
+            import pickle
+            import gzip
+            import os
+            self.cfr_solver = cfr.CFRSolver(self._env)
+            cfr_checkpoint_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ne.pkl.gz")
+            if os.path.exists(cfr_checkpoint_path):
+                with gzip.open(cfr_checkpoint_path, "rb") as f:
+                    self.cfr_avg_policy = pickle.load(f)
+            else:
+                for _ in range(config.cfr_iterations):
+                    self.cfr_solver.evaluate_and_update_policy()
+                self.cfr_avg_policy = self.cfr_solver.average_policy()
 
     @property
     def current_player(self):
@@ -76,22 +90,59 @@ class LeducPoker(BaseDiscreteActionEnv):
                 # self.bets = [1, 1]  # Both players place blind ante
                 self.bets = [100 - self.state.money()[0], 100 - self.state.money()[1]]
                 
+                initial_observation = {
+                    'observation': self.render(),
+                    'legal_actions': self.get_all_actions(),
+                }
+                execute_results = []
                 if self.built_in_opponent != "none" and self.opponent_first_move:
+                    current_player = self.current_player
                     opponent_action = self._opponent_step()
-                    self._step(opponent_action)
-                return self.render()
+                    observation, rewards, done, info = self._step(opponent_action)
+                    execute_results.append({
+                        'current_player': current_player,
+                        'action': self._action_to_string(current_player, opponent_action),
+                        'rewards': rewards,
+                        'done': done,
+                        'info': info,
+                        'observation': observation,
+                        'legal_actions': self.get_all_actions(),
+                    })
+                return initial_observation, execute_results
         except (RuntimeError, RuntimeWarning) as e:
             next_seed = abs(hash(str(seed))) % (2**32) if seed is not None else 0
             return self.reset(next_seed)
 
     def step(self, action):
+        execute_results = []
+        current_player = self.current_player
         observation, rewards, done, info = self._step(action)
+
+        execute_results.append({
+            'current_player': current_player,
+            'action': self._action_to_string(current_player, action),
+            'rewards': rewards,
+            'done': done,
+            'info': info,
+            'observation': observation,
+            'legal_actions': self.get_all_actions(),
+        })
         # If chose to play with built-in opponent, we need to let the opponent take action
         if self.built_in_opponent != "none" and not done:
+            current_player = self.current_player
             opponent_action = self._opponent_step()
             observation, _rewards, done, info = self._step(opponent_action)
             rewards = [rewards[i] + _rewards[i] for i in range(2)]
-        return observation, rewards, done, info
+            execute_results.append({
+                'current_player': current_player,
+                'action': self._action_to_string(current_player, opponent_action),
+                'rewards': _rewards,
+                'done': done,
+                'info': info,
+                'observation': observation,
+                'legal_actions': self.get_all_actions(),
+            })
+        return execute_results
 
     def _step(self, action):
         if isinstance(action, str):
@@ -115,6 +166,21 @@ class LeducPoker(BaseDiscreteActionEnv):
             action = random.choice(list(self.get_all_actions().values()))
         elif self.built_in_opponent == "mcts":
             action = self.mcts_bot.step(self.state)
+        elif self.built_in_opponent == "cfr":
+            # Get the current information state for the opponent
+            info_state = self.state.information_state_string(self.current_player)
+            
+            # Get legal actions
+            legal_actions = self.state.legal_actions(self.current_player)
+            
+            # Get action probabilities from CFR policy
+            if info_state in self.cfr_avg_policy:
+                action_probs = self.cfr_avg_policy[info_state]
+                # Sample action based on probabilities
+                action = np.random.choice(legal_actions, p=action_probs)
+            else:
+                # Fallback to random action if info state not in policy
+                action = random.choice(legal_actions)
         else:
             raise ValueError(f"Invalid built-in opponent: {self.built_in_opponent}")
         # print(f"Built-in {self.built_in_opponent} opponent taking action: {self._action_to_string(self.current_player, action)}")
@@ -132,7 +198,7 @@ class LeducPoker(BaseDiscreteActionEnv):
         rules = (
             "1. Leduc poker is a two-player card game. The deck includes only six cards: two pairs of King (K), Queen (Q), and Jack (J).\n"
             "2. At the start of each game, both player_0 and player_1 place 1 chip into the pot as a blind ante.\n"
-            "3. Each player is dealt one private card, and the remaining cards are set aside unseen.\n"
+            "3. Each player is dealt one private card from the deck, and the remaining cards are set aside unseen.\n"
             "4. The game has two betting rounds. When the first round ends, one public card from the remaining cards of the deck is revealed to both players.\n"
             "5. The two players take turns acting in the betting rounds, both starting with player_0. A player can choose to:\n"
             "    a. <FOLD>: stop betting and the other player wins the pot.\n"
@@ -295,7 +361,16 @@ class LeducPoker(BaseDiscreteActionEnv):
                 "player_1_success": False,
                 "draw": False,
             }
-        return observation, reward, done, info
+        execute_results = [{
+            'current_player': player_id,
+            'action': '',
+            'rewards': reward,
+            'done': done,
+            'info': info,
+            'observation': None,
+            'legal_actions': None,
+        }]
+        return execute_results
 
     def render(self, mode: str = "text"):
         if mode == "text":

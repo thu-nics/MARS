@@ -36,35 +36,36 @@ tracker_kwargs:
 
 num_gpus_per_node: 8
 
-max_steps: 256
+max_steps: 100
 save_steps: 100
 logging_steps: 1
 eval_steps: 5
 resume_from_checkpoint: false
 
-rollout_batch_size: 128
-val_batch_size: 1024
-sequence_length: 16384
+rollout_batch_size: 32
+val_batch_size: 64
+sequence_length: 2048
 
-# reward_clip: 10
-# advantage_clip: 4
+critic_warmup: 5
+reward_clip: 2
+advantage_clip: 2
+value_clip: 2
 dual_clip_loss: true
 ppo_epochs: 1
-adv_estimator: "reinforce"
+adv_estimator: "gae"
 # pg_clip: 0.1
-#dual_clip_loss: True
 init_kl_coef: 0.0
-use_kl_loss: true
-kl_loss_coef: 0.20
 
 whiten_advantages: true
-entropy_loss_coef: 0
+entropy_loss_coef: 0.01
+loss_agg_mode: "token-mean"
 
-pretrain: /mnt/public/yuanhuining/models/Qwen3-4B/
+pretrain: /mnt/public/algm/models/Qwen3-0.6B/
+reward_pretrain: /mnt/public/algm/models/Qwen3-0.6B/
 
 actor_train:
   model_args:
-    flash_attn: fa2
+    attn_implementation: fa2
     disable_gradient_checkpointing: false
     dtype: bf16
     model_type: ~
@@ -93,13 +94,38 @@ actor_train:
   device_mapping: list(range(0,8))
   infer_batch_size: 2
 
+critic:
+  model_args:
+    attn_implementation: fa2
+    disable_gradient_checkpointing: false
+    dtype: bf16
+    model_type: auto_token_classification
+    num_labels: 1
+  training_args:
+    lr_scheduler_type: cosine_with_min_lr
+    learning_rate: 1e-6
+    weight_decay: 0.05
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 2
+    warmup_steps: 10
+  data_args:
+    template: qwen3
+  strategy_args:
+    strategy_name: deepspeed_train
+    strategy_config:
+      ${deepspeed_zero3_cpuoffload}
+  device_mapping: list(range(0,8))
+  infer_batch_size: 2
+
 actor_infer:
   model_args:
-    flash_attn: fa2
+    attn_implementation: fa2
     disable_gradient_checkpointing: true
     dtype: bf16
   generating_args:
-    max_new_tokens: 4096 # single-turn response length
+    max_new_tokens: 1024 # single-turn response length
     top_p: 0.99
     top_k: 100
     num_beams: 1
@@ -117,7 +143,7 @@ actor_infer:
 
 reference:
   model_args:
-    flash_attn: fa2
+    attn_implementation: fa2
     disable_gradient_checkpointing: true
     dtype: bf16
     model_type: ~
@@ -135,15 +161,10 @@ use_turn_scores: True # important to GAE when applying token-level rewards to to
 enable_think: True # False -> no think RL
 max_actions_per_traj: 10
 max_steps_per_traj: 10
-
 reward_normalization:
   grouping: tags # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
-  method: mean # asym_clip / identity / mean_std
-  separate_norm_for_selfplay: true
-whiten_rewards: true
-advantage_norm: mean
-# loss_agg_mode: token-mean
-pg_clip_high: 0.20
+  method: identity # asym_clip / identity / mean_std
+whiten_rewards: False
 
 custom_envs:
   LeducPoker:
@@ -153,47 +174,7 @@ custom_envs:
     max_tokens: 100
     grid_vocab: false
     env_config:
-      built_in_opponent: none  # Changed from "mcts" to "none" for self-play training
-      render_mode: text
-  LeducPokerEval-first-move:
-    env_type: leduc_poker
-    max_actions_per_traj: ${max_actions_per_traj}
-    max_steps_per_traj: ${max_steps_per_traj}
-    max_tokens: 100
-    grid_vocab: false
-    env_config:
-      built_in_opponent: mcts  # Use MCTS opponent for evaluation
-      render_mode: text
-  LeducPokerEval-second-move:
-    env_type: leduc_poker
-    max_actions_per_traj: ${max_actions_per_traj}
-    max_steps_per_traj: ${max_steps_per_traj}
-    max_tokens: 100
-    grid_vocab: false
-    env_config:
-      built_in_opponent: mcts  # Use MCTS opponent for evaluation
-      opponent_first_move: true
-      render_mode: text
-  LeducPokerEval-first-move-1000:
-    env_type: leduc_poker
-    max_actions_per_traj: ${max_actions_per_traj}
-    max_steps_per_traj: ${max_steps_per_traj}
-    max_tokens: 100
-    grid_vocab: false
-    env_config:
-      built_in_opponent: mcts  # Use MCTS opponent for evaluation
-      max_simulations: 1000
-      render_mode: text
-  LeducPokerEval-second-move-1000:
-    env_type: leduc_poker
-    max_actions_per_traj: ${max_actions_per_traj}
-    max_steps_per_traj: ${max_steps_per_traj}
-    max_tokens: 100
-    grid_vocab: false
-    env_config:
-      built_in_opponent: mcts  # Use MCTS opponent for evaluation
-      opponent_first_move: true
-      max_simulations: 1000
+      built_in_opponent: random
       render_mode: text
 
 train_env_manager:
@@ -209,5 +190,5 @@ val_env_manager:
   max_env_num_per_worker: 16
   env_groups: 512
   group_size: 1 # should be set to 1 because val temperature is set to 0 and same prompt leads to same output
-  tags: [LeducPokerEval-first-move, LeducPokerEval-second-move, LeducPokerEval-first-move-1000, LeducPokerEval-second-move-1000]  # Use LeducPokerEval for evaluation with MCTS opponent
-  n_groups: [128, 128, 128, 128] #
+  tags: [LeducPoker]
+  n_groups: [512] #
