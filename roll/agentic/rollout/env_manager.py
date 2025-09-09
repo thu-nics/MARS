@@ -518,9 +518,16 @@ class EnvManager:
             use_raw_llm_response=False, 
             player_id=player_id,
         )
+        # # DEBUG
+        # print(f"=====================DEBUG Begin=====================\n")
         # print("llm_input_texts: ", llm_input_texts)
-        # print("messages_list: ", messages_list)
+        # # print("messages_list: ", messages_list)
         # print(f"is_self_play: {is_self_play}, player_id: {player_id}, messages_list: {messages_list}")
+        # print("env_status: ", self.env_entry["status"])
+        # print(f"State:{self.env_entry['env'].render()}")
+        # print(f"Info: {self.env_entry['env']._get_info()}\n")
+        # print(f"=====================DEBUG End=====================\n")
+
         inputs = self.tokenizer(
             llm_input_texts, return_tensors="pt", padding=True, padding_side="left", truncation=False
         )

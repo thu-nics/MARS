@@ -1,0 +1,501 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import random
+from roll.agentic.env.kuhn_poker.config import KuhnPokerConfig
+from roll.agentic.utils import all_seed
+from roll.agentic.env.base import BaseDiscreteActionEnv
+from textwrap import dedent
+import json
+from typing import Optional, Dict, Any
+import re
+from PIL import Image
+
+
+class KuhnPoker(BaseDiscreteActionEnv):
+    """Kuhn Poker game environment using OpenSpiel."""
+
+    def __init__(self, config: KuhnPokerConfig = KuhnPokerConfig()):
+        # Using mappings directly from config
+        self.config = config
+        self.render_mode = config.render_mode
+        self.built_in_opponent = config.built_in_opponent
+        self.opponent_first_move = config.opponent_first_move
+        self.include_opponent_turn = config.include_opponent_turn
+
+        BaseDiscreteActionEnv.__init__(self)
+
+        import pyspiel
+        self._env = pyspiel.load_game("kuhn_poker")
+        self.state = None
+        self.bets = [1, 1]  # Initial ante for both players
+
+        if self.built_in_opponent == "mcts":
+            from open_spiel.python.algorithms import mcts
+            random_state = np.random.RandomState(config.seed)
+            evaluator = mcts.RandomRolloutEvaluator(config.rollout_count, random_state)
+            self.mcts_bot = mcts.MCTSBot(
+                self._env,
+                config.uct_c,
+                config.max_simulations,
+                evaluator,
+                solve=False,
+                random_state=random_state,
+            )
+        elif self.built_in_opponent == "cfr":
+            from open_spiel.python.algorithms import cfr
+            import pickle
+            import gzip
+            import os
+            self.cfr_solver = cfr.CFRSolver(self._env)
+            cfr_checkpoint_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ne.pkl.gz")
+            if os.path.exists(cfr_checkpoint_path):
+                with gzip.open(cfr_checkpoint_path, "rb") as f:
+                    self.cfr_avg_policy = pickle.load(f)
+            else:
+                for _ in range(config.cfr_iterations):
+                    self.cfr_solver.evaluate_and_update_policy()
+                self.cfr_avg_policy = self.cfr_solver.average_policy()
+
+    @property
+    def current_player(self):
+        if self.state is None or self.state.is_terminal():
+            return 0
+        return self.state.current_player()
+
+    def reset(self, seed: Optional[int] = 0):
+        """Reset the environment with given seed.
+        seed mapping:
+            0: J, Q (player_0 gets Jack, player_1 gets Queen)
+            1: J, K (player_0 gets Jack, player_1 gets King)
+            2: Q, K (player_0 gets Queen, player_1 gets King)
+            3: Q, J (player_0 gets Queen, player_1 gets Jack)
+            4: K, J (player_0 gets King, player_1 gets Jack)
+            5: K, Q (player_0 gets King, player_1 gets Queen)
+        """
+        try:
+            with all_seed(seed):
+                # Initialize game state and deal cards
+                card_0 = (seed // 2) % 3
+                card_1 = ((seed - 3) // 2) % 3
+                self.state = self._env.new_initial_state()
+                self.state.apply_action(card_0)  # Deal card to player 0
+                self.state.apply_action(card_1)  # Deal card to player 1
+                self.bets = [1, 1]  # Both players place blind ante
+                
+                initial_observation = {
+                    'observation': self.render(),
+                    'legal_actions': self.get_all_actions(),
+                }
+                execute_results = []
+                if self.built_in_opponent != "none" and self.opponent_first_move:
+                    current_player = self.current_player
+                    opponent_action = self._opponent_step()
+                    observation, rewards, done, info = self._step(opponent_action)
+                    execute_results.append({
+                        'current_player': current_player,
+                        'action': self._action_to_string(current_player, opponent_action),
+                        'rewards': rewards,
+                        'done': done,
+                        'info': info,
+                        'observation': observation,
+                        'legal_actions': self.get_all_actions(),
+                    })
+                return initial_observation, execute_results
+        except (RuntimeError, RuntimeWarning) as e:
+            next_seed = abs(hash(str(seed))) % (2**32) if seed is not None else 0
+            return self.reset(next_seed)
+
+    def step(self, action):
+        execute_results = []
+        current_player = self.current_player
+        observation, rewards, done, info = self._step(action)
+
+        execute_results.append({
+            'current_player': current_player,
+            'action': self._action_to_string(current_player, action),
+            'rewards': rewards,
+            'done': done,
+            'info': info,
+            'observation': observation,
+            'legal_actions': self.get_all_actions(),
+        })
+        # If chose to play with built-in opponent, we need to let the opponent take action
+        if self.built_in_opponent != "none" and not done:
+            current_player = self.current_player
+            opponent_action = self._opponent_step()
+            observation, _rewards, done, info = self._step(opponent_action)
+            rewards = [rewards[i] + _rewards[i] for i in range(2)]
+            execute_results.append({
+                'current_player': current_player,
+                'action': self._action_to_string(current_player, opponent_action),
+                'rewards': _rewards,
+                'done': done,
+                'info': info,
+                'observation': observation,
+                'legal_actions': self.get_all_actions(),
+            })
+        return execute_results
+
+    def _step(self, action):
+        if isinstance(action, str):
+            action = self._string_to_action(action)
+        if self.state is None or self.state.is_terminal():
+            raise RuntimeError("Cannot apply action on a terminal state.")
+
+        # Update bets based on action (0: PASS, 1: BET)
+        self.bets[self.current_player] += action
+        self.state.apply_action(action)
+        observation = self.render()
+        rewards = self.state.rewards()
+        done = self.state.is_terminal()
+        info = self._get_info()
+        return observation, rewards, done, info
+
+    def _opponent_step(self):
+        if self.built_in_opponent == "random":
+            action = random.choice(list(self.get_all_actions().values()))
+        elif self.built_in_opponent == "mcts":
+            action = self.mcts_bot.step(self.state)
+        elif self.built_in_opponent == "cfr":
+            # Get the current information state for the opponent
+            info_state = self.state.information_state_string(self.current_player)
+            
+            # Get legal actions
+            legal_actions = self.state.legal_actions(self.current_player)
+            
+            # Get action probabilities from CFR policy
+            if info_state in self.cfr_avg_policy:
+                action_probs = self.cfr_avg_policy[info_state]
+                # Sample action based on probabilities
+                action = np.random.choice(legal_actions, p=action_probs)
+            else:
+                # Fallback to random action if info state not in policy
+                action = random.choice(legal_actions)
+        else:
+            raise ValueError(f"Invalid built-in opponent: {self.built_in_opponent}")
+        # print(f"Built-in {self.built_in_opponent} opponent taking action: {self._action_to_string(self.current_player, action)}")
+        return action
+
+    def get_prompt(self, mode="prefix", think=True, player_id=0):
+        if mode == "prefix":
+            prefix_prompt = self._get_prefix_prompt(think, player_id)
+            return prefix_prompt
+        else:
+            raise ValueError(f"Invalid prompt mode: {mode}")
+
+    def _get_prefix_prompt(self, think=True, player_id=0):
+        system_prompt = "You are an AI agent that makes optimal decisions to win in the game of Kuhn Poker."
+        rules = (
+            "1. Kuhn poker is a two-player card game. The deck includes only three cards: King (K) > Queen (Q) > Jack (J).\n"
+            "2. At the start of each game, both player_0 and player_1 place 1 chip into the pot as a blind ante.\n"
+            "3. Each player is dealt a private card, and the third card is set aside unseen.\n"
+            "4. The two players take turns acting, starting with player_0. A player can choose to:\n"
+            "    a. <PASS>: place no additional chips into the pot.\n"
+            "    b. <BET>: place 1 additional chip into the pot.\n"
+            "5. If a player chooses to <PASS> after the other player's <BET>, the betting player wins the pot.\n"
+            "6. If both players choose to <PASS> or both players choose to <BET>, the player with the higher card wins the pot."
+        )
+        information = (
+            f"1. You are player_{player_id}. You are competing with player_{1-player_id}.\n"
+            "2. In each of your turns:\n"
+            "   a. The game state shows your private card and the betting history.\n"
+            "   b. You need to choose an action based on your card and the current game state.\n"
+            "   c. All legal actions for the current turn are provided in the format of `<PASS>` or `<BET>`."
+        )
+        FORMAT_PROMPT = "<answer>{your chosen action}</answer>"
+        FORMAT_PROMPT_EXAMPLE = "<answer><PASS></answer>"
+        instructions = (
+            f"Always choose only one action from the legal actions and output `{FORMAT_PROMPT}` with no extra text after you finish the thinking process. "
+            f"For example, `{FORMAT_PROMPT_EXAMPLE}`. "
+            "Strictly follow the above format. Responses that do not follow the format will result in immediate loss of the game."
+        )
+        user_prompt = (
+            f"GAME RULES:\n{rules}\n\n"
+            f"PLAYER INFORMATION:\n{information}\n\n"
+            f"RESPONSE INSTRUCTIONS:\n{instructions}\n\n"
+        )
+        prefix_prompt = {"system": system_prompt, "user": user_prompt}
+        return prefix_prompt
+
+    def get_all_actions(self):
+        return self._get_legal_actions(self.current_player)
+
+    def _get_legal_actions(self, player_id):
+        legal_actions = dict()
+        if self.state is None:
+            return legal_actions
+        actions = self.state.legal_actions(player_id)
+        for a in actions:
+            legal_actions[a] = self._action_to_string(player_id, a)
+        return legal_actions
+
+
+
+    def _action_to_string(self, player_id, action):
+        if isinstance(action, str):
+            return action
+        if action == 0:
+            return "<PASS>"
+        else:
+            return "<BET>"
+
+    def _string_to_action(self, action_str):
+        action_str = action_str.strip().upper()
+        if action_str == "<PASS>":
+            return 0
+        elif action_str == "<BET>":
+            return 1
+        else:
+            # Try to extract from different formats
+            if "PASS" in action_str:
+                return 0
+            elif "BET" in action_str:
+                return 1
+            else:
+                raise ValueError(f"Invalid action string: {action_str}")
+
+    def _get_info(self):
+        if self.state is None:
+            return {}
+        
+        # If game just started, return card information
+        if len(self.state.history()) == 2 and not self.state.is_terminal():
+            deck = ["Jack (J)", "Queen (Q)", "King (K)"]
+            card_0_idx = self.state.history()[0]
+            card_1_idx = self.state.history()[1]
+            # Return scalar values instead of lists to avoid float() conversion errors
+            return {
+                "card_0_idx": float(card_0_idx),
+                "card_1_idx": float(card_1_idx),
+                "total_pot": float(sum(self.bets)),
+                "player_0_bet": float(self.bets[0]),
+                "player_1_bet": float(self.bets[1]),
+            }
+        
+        # If game is terminal, return final results
+        if self.state.is_terminal():
+            returns = self.state.returns()
+            winner = int(np.argmax(returns)) if returns[0] != returns[1] else -1
+            deck = ["Jack (J)", "Queen (Q)", "King (K)"]
+            card_0_idx = self.state.history()[0]
+            card_1_idx = self.state.history()[1]
+            return {
+                "card_0": deck[card_0_idx],
+                "card_1": deck[card_1_idx],
+                "player_0_return": returns[0],
+                "player_1_return": returns[1],
+                "winner": winner,
+                "player_0_lose_for_wrong_format": 0,
+                "player_1_lose_for_wrong_format": 0,
+                "player_0_lose_for_overlong_response": 0,
+                "player_1_lose_for_overlong_response": 0,
+                "player_0_success": winner == 0,
+                "player_1_success": winner == 1,
+                "draw": winner == -1,
+                "total_pot": float(sum(self.bets)),
+                "player_0_bet": float(self.bets[0]),
+                "player_1_bet": float(self.bets[1]),
+            }
+        else:
+            return {
+                "total_pot": float(sum(self.bets)),
+                "player_0_bet": float(self.bets[0]),
+                "player_1_bet": float(self.bets[1]),
+            }
+
+    def get_losing_state(self, player_id: int=0, overlong_response: bool=False):
+        observation = self.render()
+        done = True
+        if player_id == 0:
+            reward = [-1, 0]
+            info = {
+                "player_0_return": -1,
+                "player_1_return": 1,
+                "winner": 1,
+                "player_0_lose_for_wrong_format": 1,
+                "player_1_lose_for_wrong_format": 0,
+                "player_0_lose_for_overlong_response": 1 if overlong_response else 0,
+                "player_1_lose_for_overlong_response": 0,
+                "player_0_success": False,
+                "player_1_success": True,
+                "draw": False,
+            }
+        else:
+            reward = [0, -1]
+            info = {
+                "player_0_return": 1,
+                "player_1_return": -1,
+                "winner": 0,
+                "player_0_lose_for_wrong_format": 0,
+                "player_1_lose_for_wrong_format": 1,
+                "player_0_lose_for_overlong_response": 0,
+                "player_1_lose_for_overlong_response": 1 if overlong_response else 0,
+                "player_0_success": True,
+                "player_1_success": False,
+                "draw": False,
+            }
+        execute_results = [{
+            'current_player': player_id,
+            'action': '',
+            'rewards': reward,
+            'done': done,
+            'info': info,
+            'observation': None,
+            'legal_actions': None,
+        }]
+        return execute_results
+
+    def render(self, mode: str = "text"):
+        if mode == "text":
+            return self._render_text()
+        elif mode == "rgb_array":
+            return self._render_rgb_array()
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+
+    def _render_text(self):
+        """Render the game state as text."""
+        if self.state is None:
+            return "Game not started"
+
+        history = ["1. Blind ante: both player_0 and player_1 place 1 chip into the pot."]
+        
+        deck = ["Jack (J)", "Queen (Q)", "King (K)"]
+
+        info_state = self.state.information_state_tensor(self.current_player)
+        card_idx = np.argmax(info_state[2:5])
+        card = deck[card_idx]
+        history.append(f"2. Deal: your card is {card}.")
+
+        
+        # Show action history
+        action_set = ["<PASS>", "<BET>"]
+        if len(self.state.history()) > 2:
+            num_turns = len(self.state.history()) - 2
+            for i in range(num_turns):
+                player_id = i % 2
+                action_idx = self.state.history()[2 + i]
+                action = action_set[action_idx]
+                history.append(f"{i + 3}. Turn {i + 1}: player_{player_id} chooses to {action}.")
+        # print(f"history: {history}")
+        return "\n".join(history)
+
+    def _render_rgb_array(self):
+        """Todo: Render Kuhn Poker game state as an image."""
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.set_xlim(0, 10)
+        ax.set_ylim(0, 8)
+        
+        # Title
+        ax.text(5, 7.5, "Kuhn Poker", fontsize=20, ha="center", va="center", fontweight="bold")
+        
+        if self.state is not None and len(self.state.history()) >= 2:
+            deck = ["Jack (J)", "Queen (Q)", "King (K)"]
+            
+            # Determine the player to show (avoid using invalid current_player in terminal states)
+            display_player = 0  # Default to player 0
+            if not self.state.is_terminal():
+                display_player = self.current_player
+            
+            # Show cards for display player
+            try:
+                if self.state.is_terminal():
+                    # Get cards from history for terminal states
+                    card_idx = self.state.history()[display_player]
+                    card = deck[card_idx]
+                else:
+                    # Get current player's card from information state tensor
+                    info_state = self.state.information_state_tensor(display_player)
+                    if len(info_state) >= 5:
+                        card_idx = np.argmax(info_state[2:5])
+                        card = deck[card_idx]
+                    else:
+                        card_idx = self.state.history()[display_player]
+                        card = deck[card_idx]
+                
+                ax.text(2, 6, f"Player {display_player}", fontsize=14, ha="center", fontweight="bold")
+                ax.text(2, 5.5, f"Your Card: {card}", fontsize=12, ha="center")
+            except Exception as e:
+                # Fallback display
+                ax.text(2, 6, f"Player {display_player}", fontsize=14, ha="center", fontweight="bold")
+                ax.text(2, 5.5, "Card: Error", fontsize=12, ha="center")
+            
+            # Show opponent (hidden card)
+            opponent_id = 1 - display_player
+            ax.text(8, 6, f"Player {opponent_id}", fontsize=14, ha="center", fontweight="bold")
+            ax.text(8, 5.5, "Card: Hidden", fontsize=12, ha="center")
+            
+            # Show pot and bets
+            ax.text(5, 4.5, f"Pot: {sum(self.bets)} chips", fontsize=14, ha="center", fontweight="bold")
+            ax.text(2, 4, f"Bet: {self.bets[display_player]} chips", fontsize=12, ha="center")
+            ax.text(8, 4, f"Bet: {self.bets[opponent_id]} chips", fontsize=12, ha="center")
+            
+            # Show action history
+            if len(self.state.history()) > 2:
+                ax.text(5, 3, "Action History:", fontsize=12, ha="center", fontweight="bold")
+                action_set = ["PASS", "BET"]
+                num_turns = len(self.state.history()) - 2
+                for i in range(min(num_turns, 3)):  # Show last 3 actions
+                    player_id = i % 2
+                    action_idx = self.state.history()[2 + i]
+                    action = action_set[action_idx]
+                    ax.text(5, 2.5 - i*0.3, f"Turn {i+1}: Player {player_id} -> {action}", 
+                           fontsize=10, ha="center")
+        
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['bottom'].set_visible(False)
+        ax.spines['left'].set_visible(False)
+
+        # convert matplotlib figure to numpy array, avoid file I/O
+        fig.canvas.draw()
+        buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        plt.close(fig)
+        image = Image.fromarray(buf)
+        return image
+
+    def close(self):
+        """Close the environment."""
+        if hasattr(self, "_env") and self._env is not None:
+            self._env.close()
+
+
+if __name__ == "__main__":
+    # Basic unit test
+    print("-" * 100)
+    print("Kuhn Poker Basic unit test:")
+    print("-" * 100)
+    env = KuhnPoker()
+    
+    results = []
+    for i in range(100):
+        print('-' * 100)
+        print(f'Episode {i}')
+        print('-' * 100)
+        env.reset(seed=i % 6)  # Use different card combinations
+        done = False
+        while not done:
+            prefix_prompt = env.get_prompt(mode="prefix")
+            print(f"System prompt: \n{prefix_prompt['system']}")
+            print(f"User prompt: \n{prefix_prompt['user']}")
+            legal_actions = env.get_all_actions()
+            print(f"Legal actions: {list(legal_actions.values())}")
+            action = random.choice(list(legal_actions.values()))
+            print(f"Player {env.current_player} taking action: {action}")
+            observations, rewards, done, info = env.step(action)
+            print(f"observations: \n{observations}")
+            print(f"rewards: {rewards}")
+            print(f"done: {done}")
+            print(f"info: {info}")
+            print("-" * 100)
+        if 'winner' in info:
+            results.append(info['winner'])
+    
+    if results:
+        print("player 0 win rate: ", results.count(0) / len(results))
+        print("player 1 win rate: ", results.count(1) / len(results))
+        print("draw rate: ", results.count(-1) / len(results))
