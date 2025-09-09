@@ -228,7 +228,7 @@ class Hanabi(BaseDiscreteActionEnv):
         instructions = (
             f"Always choose only one action from the legal actions and output `{FORMAT_PROMPT}` with no extra text after you finish the thinking process. "
             f"For example, `{FORMAT_PROMPT_EXAMPLE}`. "
-            "Strictly follow the above format. Responses that do not follow the format will result in immediate loss of all life tokens and end of the game."
+            "Strictly follow the above format and keep your thinking process concise. Responses that do not follow the format will result in immediate loss of all life tokens and end of the game."
         )
 
         user_prompt = (
@@ -292,8 +292,8 @@ class Hanabi(BaseDiscreteActionEnv):
         if player_id == 0:
             reward = [-returns[0] - 10, 0]
             info = {
-                "player_0_return": 0,
-                "player_1_return": 0,
+                "player_0_return": returns[0],
+                "player_1_return": returns[0],
                 "player_0_lose_for_wrong_format": 1,
                 "player_1_lose_for_wrong_format": 0,
                 "player_0_lose_for_overlong_response": 1 if overlong_response else 0,
@@ -302,8 +302,8 @@ class Hanabi(BaseDiscreteActionEnv):
         else:
             reward = [0, -returns[1] - 10]
             info = {
-                "player_0_return": 0,
-                "player_1_return": 0,
+                "player_0_return": returns[0],
+                "player_1_return": returns[0],
                 "player_0_lose_for_wrong_format": 0,
                 "player_1_lose_for_wrong_format": 1,
                 "player_0_lose_for_overlong_response": 0,

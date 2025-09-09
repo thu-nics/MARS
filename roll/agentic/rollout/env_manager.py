@@ -806,11 +806,17 @@ class EnvManager:
                         "This is the other player's turn. "
                         "The game state, legal actions, as well as the chosen action of the other player for this turn are provided below.\n\n"
                     )
-                elif self.env_entry["env"].include_opponent_turn == "action":
+                elif self.env_entry["env"].include_opponent_turn == "action_full":
                     turn_idx_content = (
                         f"Information of Turn-{turn_idx}:\n\n"
                         "This is the other player's turn. The game state for this turn is not available to you. "
                         "The legal actions and chosen action of the other player for this turn are provided below.\n\n"
+                    )
+                elif self.env_entry["env"].include_opponent_turn == "action":
+                    turn_idx_content = (
+                        f"Information of Turn-{turn_idx}:\n\n"
+                        "This is the other player's turn. The game state for this turn is not available to you. "
+                        "The chosen action of the other player for this turn is provided below.\n\n"
                     )
                 elif self.env_entry["env"].include_opponent_turn == "none":
                     continue
@@ -828,7 +834,7 @@ class EnvManager:
                             f"GAME STATE:\n{content['state']}\n\n"
                             f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}.\n\n"
                         )
-                    elif self.env_entry["env"].include_opponent_turn == "action":
+                    elif self.env_entry["env"].include_opponent_turn == "action_full":
                         messages[-1]["content"] += (
                             f"LEGAL ACTIONS:\n{', '.join(content['legal_actions'].values())}.\n\n"
                         )

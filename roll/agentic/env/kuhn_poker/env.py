@@ -10,6 +10,7 @@ import json
 from typing import Optional, Dict, Any
 import re
 from PIL import Image
+import warnings
 
 
 class KuhnPoker(BaseDiscreteActionEnv):
@@ -124,12 +125,11 @@ class KuhnPoker(BaseDiscreteActionEnv):
         if self.built_in_opponent != "none" and not done:
             current_player = self.current_player
             opponent_action = self._opponent_step()
-            observation, _rewards, done, info = self._step(opponent_action)
-            rewards = [rewards[i] + _rewards[i] for i in range(2)]
+            observation, rewards, done, info = self._step(opponent_action)
             execute_results.append({
                 'current_player': current_player,
                 'action': self._action_to_string(current_player, opponent_action),
-                'rewards': _rewards,
+                'rewards': rewards,
                 'done': done,
                 'info': info,
                 'observation': observation,
@@ -208,7 +208,7 @@ class KuhnPoker(BaseDiscreteActionEnv):
         instructions = (
             f"Always choose only one action from the legal actions and output `{FORMAT_PROMPT}` with no extra text after you finish the thinking process. "
             f"For example, `{FORMAT_PROMPT_EXAMPLE}`. "
-            "Strictly follow the above format. Responses that do not follow the format will result in immediate loss of the game."
+            "Strictly follow the above format and keep your thinking process concise. Responses that do not follow the format will result in immediate loss of the game."
         )
         user_prompt = (
             f"GAME RULES:\n{rules}\n\n"
@@ -229,8 +229,6 @@ class KuhnPoker(BaseDiscreteActionEnv):
         for a in actions:
             legal_actions[a] = self._action_to_string(player_id, a)
         return legal_actions
-
-
 
     def _action_to_string(self, player_id, action):
         if isinstance(action, str):
@@ -360,7 +358,6 @@ class KuhnPoker(BaseDiscreteActionEnv):
             return "Game not started"
 
         history = ["1. Blind ante: both player_0 and player_1 place 1 chip into the pot."]
-        
         deck = ["Jack (J)", "Queen (Q)", "King (K)"]
 
         info_state = self.state.information_state_tensor(self.current_player)
@@ -368,7 +365,6 @@ class KuhnPoker(BaseDiscreteActionEnv):
         card = deck[card_idx]
         history.append(f"2. Deal: your card is {card}.")
 
-        
         # Show action history
         action_set = ["<PASS>", "<BET>"]
         if len(self.state.history()) > 2:
@@ -382,81 +378,8 @@ class KuhnPoker(BaseDiscreteActionEnv):
         return "\n".join(history)
 
     def _render_rgb_array(self):
-        """Todo: Render Kuhn Poker game state as an image."""
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.set_xlim(0, 10)
-        ax.set_ylim(0, 8)
-        
-        # Title
-        ax.text(5, 7.5, "Kuhn Poker", fontsize=20, ha="center", va="center", fontweight="bold")
-        
-        if self.state is not None and len(self.state.history()) >= 2:
-            deck = ["Jack (J)", "Queen (Q)", "King (K)"]
-            
-            # Determine the player to show (avoid using invalid current_player in terminal states)
-            display_player = 0  # Default to player 0
-            if not self.state.is_terminal():
-                display_player = self.current_player
-            
-            # Show cards for display player
-            try:
-                if self.state.is_terminal():
-                    # Get cards from history for terminal states
-                    card_idx = self.state.history()[display_player]
-                    card = deck[card_idx]
-                else:
-                    # Get current player's card from information state tensor
-                    info_state = self.state.information_state_tensor(display_player)
-                    if len(info_state) >= 5:
-                        card_idx = np.argmax(info_state[2:5])
-                        card = deck[card_idx]
-                    else:
-                        card_idx = self.state.history()[display_player]
-                        card = deck[card_idx]
-                
-                ax.text(2, 6, f"Player {display_player}", fontsize=14, ha="center", fontweight="bold")
-                ax.text(2, 5.5, f"Your Card: {card}", fontsize=12, ha="center")
-            except Exception as e:
-                # Fallback display
-                ax.text(2, 6, f"Player {display_player}", fontsize=14, ha="center", fontweight="bold")
-                ax.text(2, 5.5, "Card: Error", fontsize=12, ha="center")
-            
-            # Show opponent (hidden card)
-            opponent_id = 1 - display_player
-            ax.text(8, 6, f"Player {opponent_id}", fontsize=14, ha="center", fontweight="bold")
-            ax.text(8, 5.5, "Card: Hidden", fontsize=12, ha="center")
-            
-            # Show pot and bets
-            ax.text(5, 4.5, f"Pot: {sum(self.bets)} chips", fontsize=14, ha="center", fontweight="bold")
-            ax.text(2, 4, f"Bet: {self.bets[display_player]} chips", fontsize=12, ha="center")
-            ax.text(8, 4, f"Bet: {self.bets[opponent_id]} chips", fontsize=12, ha="center")
-            
-            # Show action history
-            if len(self.state.history()) > 2:
-                ax.text(5, 3, "Action History:", fontsize=12, ha="center", fontweight="bold")
-                action_set = ["PASS", "BET"]
-                num_turns = len(self.state.history()) - 2
-                for i in range(min(num_turns, 3)):  # Show last 3 actions
-                    player_id = i % 2
-                    action_idx = self.state.history()[2 + i]
-                    action = action_set[action_idx]
-                    ax.text(5, 2.5 - i*0.3, f"Turn {i+1}: Player {player_id} -> {action}", 
-                           fontsize=10, ha="center")
-        
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['bottom'].set_visible(False)
-        ax.spines['left'].set_visible(False)
-
-        # convert matplotlib figure to numpy array, avoid file I/O
-        fig.canvas.draw()
-        buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        plt.close(fig)
-        image = Image.fromarray(buf)
-        return image
+        warnings.warn("Kuhn Poker does not support image rendering yet.")
+        return None
 
     def close(self):
         """Close the environment."""

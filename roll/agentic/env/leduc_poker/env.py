@@ -11,6 +11,7 @@ from itertools import permutations
 from typing import Optional, Dict, Any
 import re
 from PIL import Image
+import warnings
 
 
 class LeducPoker(BaseDiscreteActionEnv):
@@ -131,12 +132,11 @@ class LeducPoker(BaseDiscreteActionEnv):
         if self.built_in_opponent != "none" and not done:
             current_player = self.current_player
             opponent_action = self._opponent_step()
-            observation, _rewards, done, info = self._step(opponent_action)
-            rewards = [rewards[i] + _rewards[i] for i in range(2)]
+            observation, rewards, done, info = self._step(opponent_action)
             execute_results.append({
                 'current_player': current_player,
                 'action': self._action_to_string(current_player, opponent_action),
-                'rewards': _rewards,
+                'rewards': rewards,
                 'done': done,
                 'info': info,
                 'observation': observation,
@@ -223,7 +223,7 @@ class LeducPoker(BaseDiscreteActionEnv):
         instructions = (
             f"Always choose only one action from the legal actions and output `{FORMAT_PROMPT}` with no extra text after you finish the thinking process. "
             f"For example, `{FORMAT_PROMPT_EXAMPLE}`. "
-            "Strictly follow the above format. Responses that do not follow the format will result in immediate loss of the game."
+            "Strictly follow the above format and keep your thinking process concise. Responses that do not follow the format will result in immediate loss of the game."
         )
         user_prompt = (
             f"GAME RULES:\n{rules}\n\n"
@@ -300,7 +300,6 @@ class LeducPoker(BaseDiscreteActionEnv):
             
             card_0_idx = self.state.history()[0]
             card_1_idx = self.state.history()[1]
-
 
             return {
                 "card_0": deck[card_0_idx],
@@ -394,9 +393,7 @@ class LeducPoker(BaseDiscreteActionEnv):
             return "Game not started"
 
         info_state = self.state.information_state_tensor(self.current_player)
-        
         history = ["1. Blind ante: both player_0 and player_1 place 1 chip into the pot."]
-        
         round_str = "first" if np.sum(info_state[8:14]) == 0 else "second"
         
         # Show current player's card
@@ -446,7 +443,7 @@ class LeducPoker(BaseDiscreteActionEnv):
         return "\n".join(history)
 
     def _render_rgb_array(self):
-        warnings.warn("Hanabi does not support image rendering yet.")
+        warnings.warn("Leduc Poker does not support image rendering yet.")
         return None
 
     def close(self):
