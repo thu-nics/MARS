@@ -32,7 +32,7 @@ class EnvManagerConfig(WorkerConfig):
     group_size: int = field(
         default=1, metadata={"help": "Under the same group, the env config and env seed are ensured to be equal"}
     )
-    tags: List[str] = field(default_factory=lambda: ["SimpleSokoban"], metadata={"help": "Environment tags."})
+    tags: List[str] = field(default_factory=list, metadata={"help": "Environment tags."})
     n_groups: List[int] = field(
         default_factory=lambda: [128],
         metadata={

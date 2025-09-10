@@ -35,14 +35,14 @@ tracker_kwargs:
 
 num_gpus_per_node: 8
 
-max_steps: 10
+max_steps: 1
 save_steps: 10000
 logging_steps: 1
 eval_steps: 10
 resume_from_checkpoint: false
 
-rollout_batch_size: 1
-sequence_length: 16384
+rollout_batch_size: 96
+sequence_length: 32768
 
 reward_clip: 20
 advantage_clip: 10.0
@@ -66,7 +66,7 @@ actor_infer:
     top_p: 0.99
     top_k: 100
     num_beams: 1
-    temperature: 0.99
+    temperature: 0.6
     num_return_sequences: 1
   data_args:
     template: qwen3
@@ -82,58 +82,39 @@ enable_response_mask: True
 action_sep: "||"
 use_turn_scores: False # important to GAE when applying token-level rewards to token-level advantages. If False, will take the sum of scores as the reward for the last turn.
 enable_think: True # False -> no think RL
-max_actions_per_traj: 10
-max_steps_per_traj: 3
+max_actions_per_traj: 20
 
 custom_envs:
-  SimpleSokoban:
-    env_type: sokoban
-    max_actions_per_traj:  ${max_actions_per_traj} # used in environment state manager to control the actual max actions executed per trajectory
-    max_steps_per_traj: ${max_steps_per_traj}
-    env_instruction: "You are solving the Sokoban puzzle. You are the player and you need to push all boxes to targets. When you are right next to a box, you can push it by moving in the same direction. You cannot push a box through a wall, and you cannot pull a box. The answer must be one of action in a turn, format is <answer>Right</answer>"
-    max_tokens: 100 # used to curate llm prompt "max words", not used for rollout
-    env_config: # keys should be a subset of SokobanConfig
-      dim_x: 6
-      dim_y: 6
-      num_boxes: 1
-      max_steps: ${max_actions_per_traj}
-      
   KuhnPoker:
     env_type: kuhn_poker
-    max_actions_per_traj: ${max_actions_per_traj}
-    max_steps_per_traj: ${max_steps_per_traj}
-    max_tokens: 100
-    grid_vocab: false
-    env_config:
-      built_in_opponent: none  # Changed from "mcts" to "none" for self-play training
-      render_mode: text
-
-  KuhnPoker-first-move:
-    env_type: kuhn_poker
     max_actions_per_traj:  ${max_actions_per_traj}
-    max_steps_per_traj: ${max_steps_per_traj}
-    max_tokens: 100
     grid_vocab: false
     env_config:
       built_in_opponent: none
       render_mode: text
 
-  KuhnPoker-second-move:
+  KuhnPoker-first:
     env_type: kuhn_poker
     max_actions_per_traj:  ${max_actions_per_traj}
-    max_steps_per_traj: ${max_steps_per_traj}
-    max_tokens: 100
     grid_vocab: false
     env_config:
-      built_in_opponent: none
-      opponent_first_move: true
+      built_in_opponent: cfr
+      render_mode: text
+
+  KuhnPoker-second:
+    env_type: kuhn_poker
+    max_actions_per_traj:  ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      built_in_opponent: cfr
+      opponent_player: 0
       render_mode: text
 
 train_env_manager:
   format_penalty: 0.05 # sokoban env penalty_for_step=-0.1
   max_env_num_per_worker: 32
-  env_groups: 32
+  env_groups: 96
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
-  tags: [KuhnPoker]
-  n_groups: [32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  tags: [KuhnPoker, KuhnPoker-first, KuhnPoker-second]
+  n_groups: [32, 32, 32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
