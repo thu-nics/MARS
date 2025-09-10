@@ -1,5 +1,6 @@
 #!/bin/bash
 set +x
+ray stop
 
 CONFIG_PATH=$(basename $(dirname $0))
 
