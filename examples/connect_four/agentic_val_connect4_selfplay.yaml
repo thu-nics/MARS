@@ -36,15 +36,15 @@ tracker_kwargs:
 
 num_gpus_per_node: 8
 
-max_steps: 256
-save_steps: 100
+max_steps: 200
+save_steps: 20
 logging_steps: 1
 eval_steps: 5
 resume_from_checkpoint: false
 
 rollout_batch_size: 128
-val_batch_size: 1024
-sequence_length: 16384
+val_batch_size: 1500
+sequence_length: 32768
 
 # reward_clip: 10
 # advantage_clip: 4
@@ -83,7 +83,7 @@ actor_train:
     strategy_name: megatron_train
     strategy_config:
       sequence_parallel: true
-      tensor_model_parallel_size: 2
+      tensor_model_parallel_size: 4
       pipeline_model_parallel_size: 1
       expert_model_parallel_size: 1
       use_distributed_optimizer: true
@@ -103,7 +103,7 @@ actor_infer:
     top_p: 0.99
     top_k: 100
     num_beams: 1
-    temperature: 0.5
+    temperature: 0.6
     num_return_sequences: 1
   data_args:
     template: qwen3
@@ -133,7 +133,7 @@ enable_response_mask: True
 action_sep: "||"
 use_turn_scores: True # important to GAE when applying token-level rewards to token-level advantages. If False, will take the sum of scores as the reward for the last turn.
 enable_think: True # False -> no think RL
-max_actions_per_traj: 42
+max_actions_per_traj: 50
 reward_normalization:
   grouping: tags # 可以tags(env_type)/traj_group_id(group)/batch(rollout_batch)... group_by计算reward/adv
   method: mean # asym_clip / identity / mean_std
@@ -147,66 +147,176 @@ custom_envs:
   Connect4:
     env_type: connect_four
     max_actions_per_traj: ${max_actions_per_traj}
-    max_steps_per_traj: ${max_actions_per_traj}
-    max_tokens: 100
     grid_vocab: false
     env_config:
-      built_in_opponent: none  # Changed from "mcts" to "none" for self-play training
+      built_in_opponent: none
       render_mode: text
-  Connect4Eval-first-move:
-    env_type: connect_four
+
+  TicTacToe-first-100:
+    env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
-    max_steps_per_traj: ${max_actions_per_traj}
-    max_tokens: 100
     grid_vocab: false
     env_config:
-      built_in_opponent: mcts  # Use MCTS opponent for evaluation
+      built_in_opponent: mcts
       render_mode: text
-  Connect4Eval-second-move:
-    env_type: connect_four
+
+  TicTacToe-second-100:
+    env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
-    max_steps_per_traj: ${max_actions_per_traj}
-    max_tokens: 100
     grid_vocab: false
     env_config:
-      built_in_opponent: mcts  # Use MCTS opponent for evaluation
-      opponent_first_move: true
+      built_in_opponent: mcts
+      opponent_player: 0
       render_mode: text
-  Connect4Eval-first-move-1000:
-    env_type: connect_four
+
+  TicTacToe-first-1000:
+    env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
-    max_steps_per_traj: ${max_actions_per_traj}
-    max_tokens: 100
     grid_vocab: false
     env_config:
-      built_in_opponent: mcts  # Use MCTS opponent for evaluation
+      built_in_opponent: mcts
       max_simulations: 1000
       render_mode: text
-  Connect4Eval-second-move-1000:
-    env_type: connect_four
+
+  TicTacToe-second-1000:
+    env_type: tictactoe
     max_actions_per_traj: ${max_actions_per_traj}
-    max_steps_per_traj: ${max_actions_per_traj}
-    max_tokens: 100
     grid_vocab: false
     env_config:
-      built_in_opponent: mcts  # Use MCTS opponent for evaluation
-      opponent_first_move: true
+      built_in_opponent: mcts
+      opponent_player: 0
       max_simulations: 1000
       render_mode: text
+
+  Connect4-first-100:
+    env_type: connect_four
+    max_actions_per_traj: ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      built_in_opponent: mcts
+      render_mode: text
+
+  Connect4-second-100:
+    env_type: connect_four
+    max_actions_per_traj: ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      built_in_opponent: mcts
+      opponent_player: 0
+      render_mode: text
+
+  Connect4-first-1000:
+    env_type: connect_four
+    max_actions_per_traj: ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      built_in_opponent: mcts
+      max_simulations: 1000
+      render_mode: text
+
+  Connect4-second-1000:
+    env_type: connect_four
+    max_actions_per_traj: ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      built_in_opponent: mcts
+      opponent_player: 0
+      max_simulations: 1000
+      render_mode: text
+
+  KuhnPoker-first:
+    env_type: kuhn_poker
+    max_actions_per_traj:  ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      built_in_opponent: cfr
+      render_mode: text
+
+  KuhnPoker-second:
+    env_type: kuhn_poker
+    max_actions_per_traj:  ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      built_in_opponent: cfr
+      opponent_player: 0
+      render_mode: text
+
+  LeducPoker-first:
+    env_type: leduc_poker
+    max_actions_per_traj:  ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      built_in_opponent: ne
+      render_mode: text
+
+  LeducPoker-second:
+    env_type: leduc_poker
+    max_actions_per_traj:  ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      built_in_opponent: ne
+      opponent_player: 0
+      render_mode: text
+
+  MiniHanabi:
+    env_type: hanabi
+    max_actions_per_traj:  ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      render_mode: text
+
+  SimpleHanabi:
+    env_type: hanabi
+    max_actions_per_traj:  ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      render_mode: text
+      colors: 3
+      ranks: 2
+      hand_size: 5
+      max_information_tokens: 8
+      max_life_tokens: 3
+      
+  FullHanabi:
+    env_type: hanabi
+    max_actions_per_traj:  ${max_actions_per_traj}
+    grid_vocab: false
+    env_config:
+      render_mode: text
+      colors: 3
+      ranks: 3
+      hand_size: 5
+      max_information_tokens: 8
+      max_life_tokens: 3
 
 train_env_manager:
   format_penalty: 0.05 # sokoban env penalty_for_step=-0.1
-  max_env_num_per_worker: 32
-  env_groups: 32
+  max_env_num_per_worker: 64
+  env_groups: 64
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
   tags: [Connect4]
-  n_groups: [32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  n_groups: [64] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
 
 val_env_manager:
-  max_env_num_per_worker: 16
-  env_groups: 512
-  group_size: 1 # should be set to 1 because val temperature is set to 0 and same prompt leads to same output
-  tags: [Connect4Eval-first-move, Connect4Eval-second-move, Connect4Eval-first-move-1000, Connect4Eval-second-move-1000]  # Use Connect4Eval for evaluation with MCTS opponent
-  n_groups: [128, 128, 128, 128] #
-
+  max_env_num_per_worker: 32
+  env_groups: 480
+  group_size: 1
+  tags: [
+    TicTacToe-first-100, 
+    TicTacToe-second-100, 
+    TicTacToe-first-1000, 
+    TicTacToe-second-1000,
+    Connect4-first-100,
+    Connect4-second-100,
+    Connect4-first-1000,
+    Connect4-second-1000,
+    KuhnPoker-first,
+    KuhnPoker-second,
+    LeducPoker-first,
+    LeducPoker-second,
+    MiniHanabi,
+    SimpleHanabi,
+    FullHanabi
+  ]
+  n_groups: [32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32] #

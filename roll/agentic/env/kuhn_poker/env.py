@@ -21,7 +21,7 @@ class KuhnPoker(BaseDiscreteActionEnv):
         self.config = config
         self.render_mode = config.render_mode
         self.built_in_opponent = config.built_in_opponent
-        self.opponent_first_move = config.opponent_first_move
+        self.opponent_player = config.opponent_player
         self.include_opponent_turn = config.include_opponent_turn
 
         BaseDiscreteActionEnv.__init__(self)
@@ -49,7 +49,7 @@ class KuhnPoker(BaseDiscreteActionEnv):
             import gzip
             import os
             self.cfr_solver = cfr.CFRSolver(self._env)
-            cfr_checkpoint_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ne.pkl.gz")
+            cfr_checkpoint_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cfr.pkl.gz")
             if os.path.exists(cfr_checkpoint_path):
                 with gzip.open(cfr_checkpoint_path, "rb") as f:
                     self.cfr_avg_policy = pickle.load(f)
@@ -89,19 +89,22 @@ class KuhnPoker(BaseDiscreteActionEnv):
                     'legal_actions': self.get_all_actions(),
                 }
                 execute_results = []
-                if self.built_in_opponent != "none" and self.opponent_first_move:
-                    current_player = self.current_player
-                    opponent_action = self._opponent_step()
-                    observation, rewards, done, info = self._step(opponent_action)
-                    execute_results.append({
-                        'current_player': current_player,
-                        'action': self._action_to_string(current_player, opponent_action),
-                        'rewards': rewards,
-                        'done': done,
-                        'info': info,
-                        'observation': observation,
-                        'legal_actions': self.get_all_actions(),
-                    })
+                if self.built_in_opponent != "none":
+                    done = self.state.is_terminal()
+                    while self.current_player == self.opponent_player and not done:
+                        current_player = self.current_player
+                        opponent_action = self._opponent_step()
+                        observation, rewards, done, info = self._step(opponent_action)
+                        execute_results.append({
+                            'current_player': current_player,
+                            'action': self._action_to_string(current_player, opponent_action),
+                            'rewards': rewards,
+                            'done': done,
+                            'info': info,
+                            'next_player': self.current_player,
+                            'observation': observation,
+                            'legal_actions': self.get_all_actions(),
+                        })
                 return initial_observation, execute_results
         except (RuntimeError, RuntimeWarning) as e:
             next_seed = abs(hash(str(seed))) % (2**32) if seed is not None else 0
@@ -118,23 +121,26 @@ class KuhnPoker(BaseDiscreteActionEnv):
             'rewards': rewards,
             'done': done,
             'info': info,
+            'next_player': self.current_player,
             'observation': observation,
             'legal_actions': self.get_all_actions(),
         })
         # If chose to play with built-in opponent, we need to let the opponent take action
-        if self.built_in_opponent != "none" and not done:
-            current_player = self.current_player
-            opponent_action = self._opponent_step()
-            observation, rewards, done, info = self._step(opponent_action)
-            execute_results.append({
-                'current_player': current_player,
-                'action': self._action_to_string(current_player, opponent_action),
-                'rewards': rewards,
-                'done': done,
-                'info': info,
-                'observation': observation,
-                'legal_actions': self.get_all_actions(),
-            })
+        if self.built_in_opponent != "none":
+            while self.current_player == self.opponent_player and not done:
+                current_player = self.current_player
+                opponent_action = self._opponent_step()
+                observation, rewards, done, info = self._step(opponent_action)
+                execute_results.append({
+                    'current_player': current_player,
+                    'action': self._action_to_string(current_player, opponent_action),
+                    'rewards': rewards,
+                    'done': done,
+                    'info': info,
+                    'next_player': self.current_player,
+                    'observation': observation,
+                    'legal_actions': self.get_all_actions(),
+                })
         return execute_results
 
     def _step(self, action):
@@ -158,20 +164,10 @@ class KuhnPoker(BaseDiscreteActionEnv):
         elif self.built_in_opponent == "mcts":
             action = self.mcts_bot.step(self.state)
         elif self.built_in_opponent == "cfr":
-            # Get the current information state for the opponent
-            info_state = self.state.information_state_string(self.current_player)
-            
-            # Get legal actions
-            legal_actions = self.state.legal_actions(self.current_player)
-            
-            # Get action probabilities from CFR policy
-            if info_state in self.cfr_avg_policy:
-                action_probs = self.cfr_avg_policy[info_state]
-                # Sample action based on probabilities
-                action = np.random.choice(legal_actions, p=action_probs)
-            else:
-                # Fallback to random action if info state not in policy
-                action = random.choice(legal_actions)
+            state_policy = self.cfr_avg_policy.action_probabilities(self.state)
+            actions = list(state_policy.keys())
+            probabilities = list(state_policy.values())
+            action = int(np.random.choice(actions, p=probabilities))
         else:
             raise ValueError(f"Invalid built-in opponent: {self.built_in_opponent}")
         # print(f"Built-in {self.built_in_opponent} opponent taking action: {self._action_to_string(self.current_player, action)}")
@@ -306,10 +302,10 @@ class KuhnPoker(BaseDiscreteActionEnv):
         observation = self.render()
         done = True
         if player_id == 0:
-            reward = [-1, 0]
+            reward = [-10, 0]
             info = {
-                "player_0_return": -1,
-                "player_1_return": 1,
+                "player_0_return": -self.bets[0],
+                "player_1_return": self.bets[0],
                 "winner": 1,
                 "player_0_lose_for_wrong_format": 1,
                 "player_1_lose_for_wrong_format": 0,
@@ -320,10 +316,10 @@ class KuhnPoker(BaseDiscreteActionEnv):
                 "draw": False,
             }
         else:
-            reward = [0, -1]
+            reward = [0, -10]
             info = {
-                "player_0_return": 1,
-                "player_1_return": -1,
+                "player_0_return": self.bets[1],
+                "player_1_return": -self.bets[1],
                 "winner": 0,
                 "player_0_lose_for_wrong_format": 0,
                 "player_1_lose_for_wrong_format": 1,
@@ -339,6 +335,7 @@ class KuhnPoker(BaseDiscreteActionEnv):
             'rewards': reward,
             'done': done,
             'info': info,
+            'next_player': None,
             'observation': None,
             'legal_actions': None,
         }]
@@ -390,35 +387,46 @@ class KuhnPoker(BaseDiscreteActionEnv):
 if __name__ == "__main__":
     # Basic unit test
     print("-" * 100)
-    print("Kuhn Poker Basic unit test:")
+    print("Basic unit test:")
     print("-" * 100)
     env = KuhnPoker()
     
-    results = []
+    player_0_returns = []
+    player_1_returns = []
     for i in range(100):
         print('-' * 100)
         print(f'Episode {i}')
         print('-' * 100)
-        env.reset(seed=i % 6)  # Use different card combinations
+        prefix_prompt = env.get_prompt(mode="prefix")
+        print(f"System prompt: \n{prefix_prompt['system']}")
+        print(f"User prompt: \n{prefix_prompt['user']}")
+
+        seed = i
+        initial_observation, execute_results = env.reset(seed)
+        observation = execute_results[-1]['observation'] if execute_results else initial_observation['observation']
+        legal_actions = execute_results[-1]['legal_actions'] if execute_results else initial_observation['legal_actions']
         done = False
         while not done:
-            prefix_prompt = env.get_prompt(mode="prefix")
-            print(f"System prompt: \n{prefix_prompt['system']}")
-            print(f"User prompt: \n{prefix_prompt['user']}")
-            legal_actions = env.get_all_actions()
-            print(f"Legal actions: {list(legal_actions.values())}")
+            print(f"observation: \n{observation}")
+            print(f"legal actions: \n{legal_actions}")
             action = random.choice(list(legal_actions.values()))
             print(f"Player {env.current_player} taking action: {action}")
-            observations, rewards, done, info = env.step(action)
-            print(f"observations: \n{observations}")
+
+            execute_result = env.step(action)
+            rewards = execute_result[-1]['rewards']
+            done = execute_result[-1]['done']
+            info = execute_result[-1]['info']
             print(f"rewards: {rewards}")
             print(f"done: {done}")
             print(f"info: {info}")
             print("-" * 100)
-        if 'winner' in info:
-            results.append(info['winner'])
-    
-    if results:
-        print("player 0 win rate: ", results.count(0) / len(results))
-        print("player 1 win rate: ", results.count(1) / len(results))
-        print("draw rate: ", results.count(-1) / len(results))
+
+            observation = execute_result[-1]['observation']
+            legal_actions = execute_result[-1]['legal_actions']
+            
+        player_0_returns.append(info['player_0_return'])
+        player_1_returns.append(info['player_1_return'])
+    print("-" * 100)
+    print("player 0 returns: ", np.mean(player_0_returns))
+    print("player 1 returns: ", np.mean(player_1_returns))
+    print("-" * 100)

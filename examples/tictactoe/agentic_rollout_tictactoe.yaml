@@ -41,8 +41,8 @@ logging_steps: 1
 eval_steps: 10
 resume_from_checkpoint: false
 
-rollout_batch_size: 64
-sequence_length: 16384
+rollout_batch_size: 96
+sequence_length: 32768
 
 reward_clip: 20
 advantage_clip: 10.0
@@ -66,7 +66,7 @@ actor_infer:
     top_p: 0.99
     top_k: 100
     num_beams: 1
-    temperature: 0.99
+    temperature: 0.6
     num_return_sequences: 1
   data_args:
     template: qwen3
@@ -85,44 +85,36 @@ enable_think: True # False -> no think RL
 max_actions_per_traj: 9
 
 custom_envs:
-  SimpleSokoban:
-    env_type: sokoban
-    max_actions_per_traj:  ${max_actions_per_traj} # used in environment state manager to control the actual max actions executed per trajectory
-    max_steps_per_traj: ${max_actions_per_traj}
-    env_instruction: "You are solving the Sokoban puzzle. You are the player and you need to push all boxes to targets. When you are right next to a box, you can push it by moving in the same direction. You cannot push a box through a wall, and you cannot pull a box. The answer must be one of action in a turn, format is <answer>Right</answer>"
-    max_tokens: 100 # used to curate llm prompt "max words", not used for rollout
-    env_config: # keys should be a subset of SokobanConfig
-      dim_x: 6
-      dim_y: 6
-      num_boxes: 1
-      max_steps: ${max_actions_per_traj}
-      
-  TicTacToe-first-move:
+  TicTacToe:
     env_type: tictactoe
     max_actions_per_traj:  ${max_actions_per_traj}
-    max_steps_per_traj: ${max_actions_per_traj}
-    max_tokens: 100
+    grid_vocab: false
+    env_config:
+      built_in_opponent: none
+      render_mode: text
+
+  TicTacToe-first-100:
+    env_type: tictactoe
+    max_actions_per_traj:  ${max_actions_per_traj}
     grid_vocab: false
     env_config:
       built_in_opponent: mcts
       render_mode: text
 
-  TicTacToe-second-move:
+  TicTacToe-second-100:
     env_type: tictactoe
     max_actions_per_traj:  ${max_actions_per_traj}
-    max_steps_per_traj: ${max_actions_per_traj}
-    max_tokens: 100
     grid_vocab: false
     env_config:
       built_in_opponent: mcts
-      opponent_first_move: true
+      opponent_player: 0
       render_mode: text
 
 train_env_manager:
   format_penalty: 0.05 # sokoban env penalty_for_step=-0.1
-  max_env_num_per_worker: 64
-  env_groups: 64
+  max_env_num_per_worker: 32
+  env_groups: 96
   # under the same group, the env config and env seed are ensured to be equal
   group_size: 1
-  tags: [TicTacToe-first-move, TicTacToe-second-move]
-  n_groups: [32, 32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation
+  tags: [TicTacToe, TicTacToe-first-100, TicTacToe-second-100]
+  n_groups: [32, 32, 32] # If not set, all env names divide nums equally. Under the same group, the env config and env seed (prompt) are equal in each generation

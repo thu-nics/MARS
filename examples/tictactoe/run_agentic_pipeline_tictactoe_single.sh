@@ -14,4 +14,4 @@ export ROLL_LOG_DIR=$ROLL_LOG_DIR
 export ROLL_RENDER_DIR=$ROLL_RENDER_DIR
 mkdir -p $ROLL_LOG_DIR $ROLL_RENDER_DIR
 
-python examples/start_agentic_pipeline.py --config_path $CONFIG_PATH  --config_name agentic_val_tictactoe_tune | tee $ROLL_LOG_DIR/custom_logs.log
+python examples/start_agentic_pipeline.py --config_path $CONFIG_PATH  --config_name agentic_val_tictactoe_single | tee $ROLL_LOG_DIR/custom_logs.log

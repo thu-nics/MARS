@@ -7,7 +7,7 @@ class HanabiConfig:
     seed: int = 42
     render_mode: str = "text"
     built_in_opponent: str = "none"
-    opponent_first_move: bool = False
+    opponent_player: int = 1
     include_opponent_turn: str = "action"
 
     # game config

@@ -21,7 +21,7 @@ class ConnectFour(BaseDiscreteActionEnv):
         self.config = config
         self.render_mode = config.render_mode
         self.built_in_opponent = config.built_in_opponent
-        self.opponent_first_move = config.opponent_first_move
+        self.opponent_player = config.opponent_player
         self.include_opponent_turn = config.include_opponent_turn
 
         BaseDiscreteActionEnv.__init__(self)
@@ -58,19 +58,22 @@ class ConnectFour(BaseDiscreteActionEnv):
                         'legal_actions': self.get_all_actions(),
                 }
                 execute_results = []
-                if self.built_in_opponent != "none" and self.opponent_first_move:
-                    current_player = self.current_player
-                    opponent_action = self._opponent_step()
-                    observation, rewards, done, info = self._step(opponent_action)
-                    execute_results.append({
-                        'current_player': current_player,
-                        'action': self._action_to_string(current_player, opponent_action),
-                        'rewards': rewards,
-                        'done': done,
-                        'info': info,
-                        'observation': observation,
-                        'legal_actions': self.get_all_actions(),
-                    })
+                if self.built_in_opponent != "none":
+                    done = self.state.is_terminal()
+                    while self.current_player == self.opponent_player and not done:
+                        current_player = self.current_player
+                        opponent_action = self._opponent_step()
+                        observation, rewards, done, info = self._step(opponent_action)
+                        execute_results.append({
+                            'current_player': current_player,
+                            'action': self._action_to_string(current_player, opponent_action),
+                            'rewards': rewards,
+                            'done': done,
+                            'info': info,
+                            'next_player': self.current_player,
+                            'observation': observation,
+                            'legal_actions': self.get_all_actions(),
+                        })
                 return initial_observation, execute_results
         except (RuntimeError, RuntimeWarning) as e:
             next_seed = abs(hash(str(seed))) % (2**32) if seed is not None else 0
@@ -87,23 +90,26 @@ class ConnectFour(BaseDiscreteActionEnv):
             'rewards': rewards,
             'done': done,
             'info': info,
+            'next_player': self.current_player,
             'observation': observation,
             'legal_actions': self.get_all_actions(),
         })
         # If chose to play with built-in opponent, we need to let the opponent take action
-        if self.built_in_opponent != "none" and not done:
-            current_player = self.current_player
-            opponent_action = self._opponent_step()
-            observation, rewards, done, info = self._step(opponent_action)
-            execute_results.append({
-                'current_player': current_player,
-                'action': self._action_to_string(current_player, opponent_action),
-                'rewards': rewards,
-                'done': done,
-                'info': info,
-                'observation': observation,
-                'legal_actions': self.get_all_actions(),
-            })
+        if self.built_in_opponent != "none":
+            while self.current_player == self.opponent_player and not done:
+                current_player = self.current_player
+                opponent_action = self._opponent_step()
+                observation, rewards, done, info = self._step(opponent_action)
+                execute_results.append({
+                    'current_player': current_player,
+                    'action': self._action_to_string(current_player, opponent_action),
+                    'rewards': rewards,
+                    'done': done,
+                    'info': info,
+                    'next_player': self.current_player,
+                    'observation': observation,
+                    'legal_actions': self.get_all_actions(),
+                })
         return execute_results
 
     def _step(self, action):
@@ -246,6 +252,7 @@ class ConnectFour(BaseDiscreteActionEnv):
             'rewards': reward,
             'done': done,
             'info': info,
+            'next_player': None,
             'observation': None,
             'legal_actions': None,
         }]
@@ -300,27 +307,42 @@ if __name__ == "__main__":
     print("-" * 100)
     env = ConnectFour()
     
-    results = []
-    for i in range(1):
+    player_0_returns = []
+    player_1_returns = []
+    for i in range(100):
         print('-' * 100)
         print(f'Episode {i}')
         print('-' * 100)
-        env.reset()
+        prefix_prompt = env.get_prompt(mode="prefix")
+        print(f"System prompt: \n{prefix_prompt['system']}")
+        print(f"User prompt: \n{prefix_prompt['user']}")
+
+        seed = i
+        initial_observation, execute_results = env.reset(seed)
+        observation = execute_results[-1]['observation'] if execute_results else initial_observation['observation']
+        legal_actions = execute_results[-1]['legal_actions'] if execute_results else initial_observation['legal_actions']
         done = False
         while not done:
-            prefix_prompt = env.get_prompt(mode="prefix")
-            print(f"System prompt: \n{prefix_prompt['system']}")
-            print(f"User prompt: \n{prefix_prompt['user']}")
-            action = random.choice(list(env.get_all_actions().values()))
-            # action = env.mcts_bot.step(env.state)
+            print(f"observation: \n{observation}")
+            print(f"legal actions: \n{legal_actions}")
+            action = random.choice(list(legal_actions.values()))
             print(f"Player {env.current_player} taking action: {action}")
+
             execute_result = env.step(action)
-            print(f"observations: \n{execute_result[-1]['observation']}")
-            print(f"rewards: {execute_result[-1]['rewards']}")
-            print(f"done: {execute_result[-1]['done']}")
-            print(f"info: {execute_result[-1]['info']}")
+            rewards = execute_result[-1]['rewards']
+            done = execute_result[-1]['done']
+            info = execute_result[-1]['info']
+            print(f"rewards: {rewards}")
+            print(f"done: {done}")
+            print(f"info: {info}")
             print("-" * 100)
-        results.append(execute_result[-1]['info']['winner'])
-    print("player 0 win rate: ", results.count(0) / len(results))
-    print("player 1 win rate: ", results.count(1) / len(results))
-    print("draw rate: ", results.count(-1) / len(results))
+
+            observation = execute_result[-1]['observation']
+            legal_actions = execute_result[-1]['legal_actions']
+            
+        player_0_returns.append(info['player_0_return'])
+        player_1_returns.append(info['player_1_return'])
+    print("-" * 100)
+    print("player 0 returns: ", np.mean(player_0_returns))
+    print("player 1 returns: ", np.mean(player_1_returns))
+    print("-" * 100)

@@ -221,7 +221,7 @@ class EnvManager:
     def reset(self):
         entry = self.env_entry
         is_self_play = entry["env"].built_in_opponent == "none"
-        current_player = 1 if entry["env"].opponent_first_move else 0   # Fix current player if not self-play
+        current_player = 0 if is_self_play else 1 - entry["env"].opponent_player
         
         # 使用内部锁保护rollout_cache的初始化
         with self.internal_lock:
@@ -245,6 +245,7 @@ class EnvManager:
             initial_observation, execute_results = entry["env"].reset(seed=seed)
 
         initial_state_entry = {
+            "player": 0,
             "state": initial_observation['observation'],
             "legal_actions": initial_observation['legal_actions'],
         }
@@ -264,7 +265,7 @@ class EnvManager:
             next_state_entry=initial_state_entry,
         )
 
-        # log first turn by the built-in opponent (if opponent_first_move is True)
+        # log first turn by the built-in opponent (if opponent goes first)
         if execute_results:
             self._log_env_state(execute_results=execute_results, current_player=0)
 
@@ -322,7 +323,7 @@ class EnvManager:
         # 保护玩家切换操作
         if self.rollout_cache['is_self_play']:
             with self.internal_lock:
-                self.rollout_cache["current_player"] = 1 - current_player
+                self.rollout_cache["current_player"] = entry["env"].current_player
 
         if self.mode == "val":
             frame = entry["env"].render(mode="rgb_array")
@@ -743,6 +744,7 @@ class EnvManager:
                 "actions_left": actions_left,
             }
             next_state_entry = {
+                "player": turn['next_player'],
                 "state": turn['observation'],
                 "legal_actions": turn['legal_actions'],
             }
@@ -769,9 +771,9 @@ class EnvManager:
                         "info": turn['info'],
                     }, None)
                 
-                # If episode continues, give opponent the next state
+                # If episode continues, give next player the next state
                 if not self.env_entry["status"].terminated and not self.env_entry["status"].truncated:
-                    self._update_player_history(opponent_player, None, next_state_entry)
+                    self._update_player_history(turn['next_player'], None, next_state_entry)
 
     def _format_messages(self, prepare_for_update: bool, use_raw_llm_response: bool, player_id: int = 0):
         history_key = "history"
@@ -798,7 +800,7 @@ class EnvManager:
 
             # Original logic for single-agent mode against built-in opponent
             turn_idx = idx + 1
-            is_opponent_turn = idx % 2 != player_id
+            is_opponent_turn = content["player"] != player_id
             if is_opponent_turn:
                 if self.env_entry["env"].include_opponent_turn == "full":
                     turn_idx_content = (
