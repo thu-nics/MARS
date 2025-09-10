@@ -42,7 +42,7 @@ logging_steps: 1
 eval_steps: 5
 resume_from_checkpoint: false
 
-rollout_batch_size: 128
+rollout_batch_size: 384
 val_batch_size: 1500
 sequence_length: 32768
 

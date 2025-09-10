@@ -296,20 +296,20 @@ class Hanabi(BaseDiscreteActionEnv):
         done = True
         returns = self.state.returns()
         if player_id == 0:
-            reward = [-10, 0]
+            reward = [-returns[0] - 10, 0]
             info = {
                 "player_0_return": returns[0],
-                "player_1_return": returns[0],
+                "player_1_return": returns[1],
                 "player_0_lose_for_wrong_format": 1,
                 "player_1_lose_for_wrong_format": 0,
                 "player_0_lose_for_overlong_response": 1 if overlong_response else 0,
                 "player_1_lose_for_overlong_response": 0,
             }
         else:
-            reward = [0, -10]
+            reward = [0, -returns[1] - 10]
             info = {
                 "player_0_return": returns[0],
-                "player_1_return": returns[0],
+                "player_1_return": returns[1],
                 "player_0_lose_for_wrong_format": 0,
                 "player_1_lose_for_wrong_format": 1,
                 "player_0_lose_for_overlong_response": 0,

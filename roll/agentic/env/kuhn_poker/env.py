@@ -302,7 +302,7 @@ class KuhnPoker(BaseDiscreteActionEnv):
         observation = self.render()
         done = True
         if player_id == 0:
-            reward = [-10, 0]
+            reward = [-self.bets[0] - 10, 0]
             info = {
                 "player_0_return": -self.bets[0],
                 "player_1_return": self.bets[0],
@@ -316,7 +316,7 @@ class KuhnPoker(BaseDiscreteActionEnv):
                 "draw": False,
             }
         else:
-            reward = [0, -10]
+            reward = [0, -self.bets[1] - 10]
             info = {
                 "player_0_return": self.bets[1],
                 "player_1_return": -self.bets[1],
