@@ -283,6 +283,8 @@ class Hanabi(BaseDiscreteActionEnv):
                 "player_1_lose_for_wrong_format": 0,
                 "player_0_lose_for_overlong_response": 0,
                 "player_1_lose_for_overlong_response": 0,
+                "player_0_lose_for_overlong_sequence": 0,
+                "player_1_lose_for_overlong_sequence": 0,
             })
             if chance_node_action:
                 info["chance_node_action"] = chance_node_action
@@ -291,7 +293,7 @@ class Hanabi(BaseDiscreteActionEnv):
                 info["chance_node_action"] = chance_node_action
         return info
 
-    def get_losing_state(self, player_id: int=0, overlong_response: bool=False):
+    def get_losing_state(self, player_id: int=0, overlong_response: bool=False, overlong_sequence: bool=False):
         observation = self.render()
         done = True
         returns = self.state.returns()
@@ -304,6 +306,8 @@ class Hanabi(BaseDiscreteActionEnv):
                 "player_1_lose_for_wrong_format": 0,
                 "player_0_lose_for_overlong_response": 1 if overlong_response else 0,
                 "player_1_lose_for_overlong_response": 0,
+                "player_0_lose_for_overlong_sequence": 1 if overlong_sequence else 0,
+                "player_1_lose_for_overlong_sequence": 0,
             }
         else:
             reward = [0, -returns[1] - 10]
@@ -314,6 +318,8 @@ class Hanabi(BaseDiscreteActionEnv):
                 "player_1_lose_for_wrong_format": 1,
                 "player_0_lose_for_overlong_response": 0,
                 "player_1_lose_for_overlong_response": 1 if overlong_response else 0,
+                "player_0_lose_for_overlong_sequence": 0,
+                "player_1_lose_for_overlong_sequence": 1 if overlong_sequence else 0,
             }
         execute_results = [{
             'current_player': player_id,

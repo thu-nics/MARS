@@ -292,8 +292,8 @@ class EnvManager:
 
         return reward
 
-    def step(self, llm_output: DataProto):
-        env_input: Dict = self.get_env_input(llm_output)
+    def step(self, llm_output: DataProto, current_sequence_length: int):
+        env_input, overlong_response, overlong_sequence = self.get_env_input(llm_output, current_sequence_length)
         entry = self.env_entry
 
         # execute actions in env
@@ -303,9 +303,8 @@ class EnvManager:
             env_input["actions"], 
             self.rollout_cache["history"][-1]["legal_actions"]
         )
-        if lose_for_wrong_format:
-            overlong_response = True if env_input["token_length"] > 4090 else False
-            execute_results = entry["env"].get_losing_state(current_player, overlong_response)
+        if lose_for_wrong_format or overlong_response or overlong_sequence:
+            execute_results = entry["env"].get_losing_state(current_player, overlong_response, overlong_sequence)
             format_reward = min(self.worker_config.format_penalty, 0)
         else:
             with self.thread_lock:
@@ -334,22 +333,16 @@ class EnvManager:
     def generate(self, env_output: Dict):
         lm_input: DataProto = self.get_lm_input(env_output, prepare_for_update=False)
 
+        current_sequence_length = lm_input.batch["input_ids"].shape[1]
+        token_left = self.pipeline_config.sequence_length - current_sequence_length
         generation_config = self.worker_config.generating_args.to_dict()
-        generation_config["max_new_tokens"] = min(
-            generation_config["max_new_tokens"],
-            max(
-                self.pipeline_config.sequence_length
-                - lm_input.batch["input_ids"].shape[1]
-                - generation_config["max_new_tokens"],
-                1,
-            ),
-        )
+        generation_config["max_new_tokens"] = max(min(generation_config["max_new_tokens"], token_left), 1)
         if generation_config["max_new_tokens"] <= 1:
             self.logger.warning(
                 f"sequence_length = {self.pipeline_config.sequence_length} input_ids length = {lm_input.batch['input_ids'].shape[1]},"
                 f"maybe you should increase the response_length"
             )
-            return None
+            return None, current_sequence_length
 
         gen_batch = lm_input.pop(
             batch_keys=["input_ids", "attention_mask", "position_ids"],
@@ -367,7 +360,7 @@ class EnvManager:
             gen_batch.meta_info.pop("generation_config")
             lm_input = lm_input.repeat(repeat_times=generation_config["num_return_sequences"])
             lm_output.union(lm_input)
-        return lm_output
+        return lm_output, current_sequence_length
 
     def run_rollout_loop(self, data: DataProto):
         """
@@ -391,11 +384,11 @@ class EnvManager:
         env_output = self.reset()
 
         while self.running:
-            lm_output: DataProto = self.generate(env_output)
+            lm_output, current_sequence_length = self.generate(env_output)
 
             status = EnvStatus(truncated=True, terminated=True)
             if lm_output is not None:
-                status: EnvStatus = self.step(lm_output)
+                status: EnvStatus = self.step(lm_output, current_sequence_length)
 
             if status.done and self.running:
                 rollouts = self.formulate_rollouts()
@@ -452,7 +445,7 @@ class EnvManager:
         )
         return llm_inputs
 
-    def get_env_input(self, lm_output: DataProto) -> Dict:
+    def get_env_input(self, lm_output: DataProto, current_sequence_length: int) -> Dict:
         if lm_output.batch is not None and "responses" in lm_output.batch.keys():
             responses = self.tokenizer.batch_decode(lm_output.batch["responses"], skip_special_tokens=True)
             token_lengths = list(map(len, lm_output.batch["responses"]))
@@ -476,9 +469,13 @@ class EnvManager:
             "llm_response": llm_response,
             "actions": actions,
             # (tzy) use the token length information to compute length penalty reward.
+            "current_sequence_length": current_sequence_length,
             "token_length": token_length,
+            "token_left": self.pipeline_config.sequence_length - current_sequence_length - token_length,
         }
-        return env_input
+        overlong_response = True if token_length >= 4096 else False
+        overlong_sequence = True if env_input["token_left"] <= 1000 else False
+        return env_input, overlong_response, overlong_sequence
 
     def formulate_rollouts(self):
         """
@@ -754,7 +751,9 @@ class EnvManager:
                 num_actions_info.update({
                     'llm_response': env_input["llm_response"], 
                     'llm_raw_response': env_input["llm_raw_response"], 
-                    'token_length': env_input["token_length"]
+                    'current_sequence_length': env_input["current_sequence_length"], 
+                    'token_length': env_input["token_length"], 
+                    'token_left': env_input["token_left"], 
                 })
         
             # 保护历史记录更新操作
